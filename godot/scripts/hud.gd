@@ -16,7 +16,9 @@ const JR := 56.0
 
 var g: Game
 var touch := false
-var input := {jx = 0.0, jy = 0.0, kx = 0.0, ky = 0.0, krun = false, ksprint = false, sprint = false, look_dx = 0.0, look_dy = 0.0}
+var input := {jx = 0.0, jy = 0.0, kx = 0.0, ky = 0.0, krun = false, ksprint = false, sprint = false, look_dx = 0.0, look_dy = 0.0,
+	left = false, right = false, gas = false}
+const HOLD := ["sprint", "left", "right", "gas"]   # buttons that act while held down
 var danger := 0.0
 var fade := 0.0
 
@@ -338,7 +340,7 @@ func _build_play() -> void:
 	controls.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	controls.draw.connect(_draw_controls)
 	play.add_child(controls)
-	for n in ["crouch", "light", "sprint", "use", "flare", "call"]:
+	for n in ["crouch", "light", "sprint", "use", "flare", "call", "left", "right", "gas", "exit"]:
 		buttons[n] = {rect = Rect2(), on = n == "light", hold = false, ready = false, dim = n == "use"}
 
 func _layout() -> void:
@@ -388,6 +390,12 @@ func _layout() -> void:
 	buttons.crouch.rect = Rect2(br - Vector2(24 + 66, 128 + 66), Vector2(66, 66))
 	buttons.flare.rect = Rect2(br - Vector2(196 + 58, 110 + 58), Vector2(58, 58))
 	buttons.call.rect = Rect2(br - Vector2(188 + 54, 186 + 54), Vector2(54, 54))
+	# behind the wheel: steering arrows bottom left, the pedals bottom right
+	var bl := Vector2(safe.position.x, vs.y - B)
+	buttons.left.rect = Rect2(bl + Vector2(22, -22 - 96), Vector2(96, 96))
+	buttons.right.rect = Rect2(bl + Vector2(22 + 96 + 22, -22 - 96), Vector2(96, 96))
+	buttons.gas.rect = Rect2(br - Vector2(16 + 96, 20 + 96), Vector2(96, 96))
+	buttons.exit.rect = buttons.flare.rect
 	if joy_id < 0:
 		joy_center = Vector2(92.0 + safe.position.x, vs.y - 120.0 - B)
 	for s in screens.values():
@@ -591,6 +599,11 @@ func _icon(n: String, c: Vector2, col: Color) -> void:
 			controls.draw_arc(o + Vector2(12, 12) * s, 10.0 * s, 3.74, 5.68, 10, col, w, true)
 			controls.draw_polyline(P.call([[12, 8], [12, 13]]), col, w, true)
 			controls.draw_circle(o + Vector2(12, 16) * s, 1.0 * s, col)
+		"gas":
+			# an accelerator pedal
+			controls.draw_polyline(P.call([[8, 3], [16, 3], [18, 21], [6, 21], [8, 3]]), col, w, true)
+			for y in [8, 12, 16]:
+				controls.draw_polyline(P.call([[9, y], [15, y]]), col, w * 0.8, true)
 		"lights":
 			controls.draw_polyline(P.call([[11, 6], [6, 6], [4, 12], [6, 18], [11, 18], [11, 6]]), col, w, true)
 			for y in [7, 10.5, 14, 17.5]:
@@ -599,17 +612,22 @@ func _icon(n: String, c: Vector2, col: Color) -> void:
 func _draw_controls() -> void:
 	if not touch:
 		return
-	# joystick
-	var active := joy_id >= 0
-	var base_a := 1.0 if active else 0.55
-	controls.draw_circle(joy_center, 66, Color(10 / 255.0, 12 / 255.0, 15 / 255.0, 0.22 * base_a))
-	controls.draw_circle(joy_center, 66, Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.22 * base_a), false, 1.5, true)
-	controls.draw_circle(joy_center + joy_knob, 29, Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.28 * base_a))
-	controls.draw_circle(joy_center + joy_knob, 29, Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.45 * base_a), false, 1.5, true)
-	# round buttons (behind the wheel the same four drive the car)
 	var driving: bool = g.pl.driving
-	var labels := {crouch = "CROUCH", light = "LIGHT", sprint = "SPRINT", use = use_label, flare = "FLARE %d" % flare_n, call = "CALL"}
-	var icons := {crouch = "crouch", light = "light", sprint = "sprint", use = "drive" if use_label == "DRIVE" else ("exit" if use_label == "EXIT" else "use"), flare = "flare", call = "call"}
+	# joystick (on foot)
+	var active := joy_id >= 0
+	if driving:
+		active = false
+	var base_a := 1.0 if active else 0.55
+	if not driving:
+		controls.draw_circle(joy_center, 66, Color(10 / 255.0, 12 / 255.0, 15 / 255.0, 0.22 * base_a))
+		controls.draw_circle(joy_center, 66, Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.22 * base_a), false, 1.5, true)
+		controls.draw_circle(joy_center + joy_knob, 29, Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.28 * base_a))
+		controls.draw_circle(joy_center + joy_knob, 29, Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.45 * base_a), false, 1.5, true)
+	# round buttons
+	var labels := {crouch = "CROUCH", light = "LIGHT", sprint = "SPRINT", use = use_label, flare = "FLARE %d" % flare_n, call = "CALL",
+		left = "", right = "", gas = "GAS", exit = "EXIT"}
+	var icons := {crouch = "crouch", light = "light", sprint = "sprint", use = "drive" if use_label == "DRIVE" else ("exit" if use_label == "EXIT" else "use"), flare = "flare", call = "call",
+		left = "left", right = "right", gas = "gas", exit = "exit"}
 	if driving:
 		labels.merge({crouch = "HORN", light = "LIGHTS", sprint = "BRAKE"}, true)
 		icons.merge({crouch = "horn", light = "lights", sprint = "brake"}, true)
@@ -653,17 +671,26 @@ func _draw_controls() -> void:
 		if n == "call" and call_wait > 0.0:
 			# how long until it can ring again
 			controls.draw_arc(c, rad - 3.0, -PI * 0.5, -PI * 0.5 + TAU * (1.0 - call_wait / g.CALL_WAIT), 32, SODIUM, 2.5, true)
+		if n == "left" or n == "right":
+			# a big arrow filling the button
+			var s := -1.0 if n == "left" else 1.0
+			var tri := PackedVector2Array([c + Vector2(s * 20, 0), c + Vector2(-s * 12, -22), c + Vector2(-s * 12, 22)])
+			controls.draw_colored_polygon(tri, SODIUM if b.hold else fg)
+			continue
 		_icon(icons[n], c - Vector2(0, 7), fg)
 		var t: String = labels[n]
 		var font := _spaced(f_cond_b, 0.14, 11)
 		var sz := font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
 		controls.draw_string(font, c + Vector2(-sz.x / 2.0, 18), t, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, fg)
 
-## Which round buttons are on screen now: the flare on foot, the phone while she is still to be found.
+## Which round buttons are on screen now: the flare on foot, the phone while she is still to be found,
+## the arrows and pedals only behind the wheel.
 func _shown(n: String) -> bool:
 	match n:
-		"flare":
+		"flare", "use":
 			return not g.pl.driving
+		"left", "right", "gas", "exit":
+			return g.pl.driving
 		"call":
 			return g.phase == "explore"
 	return true
@@ -761,13 +788,17 @@ func release_input() -> void:
 	input.jx = 0.0
 	input.jy = 0.0
 	input.sprint = false
+	input.left = false
+	input.right = false
+	input.gas = false
 	input.look_dx = 0.0
 	input.look_dy = 0.0
 	joy_id = -1
 	joy_knob = Vector2.ZERO
 	looks.clear()
 	btn_touch.clear()
-	buttons.sprint.hold = false
+	for n in HOLD:
+		buttons[n].hold = false
 	_layout()
 
 ## Per-frame HUD update while playing (hudUpdate in the browser version).
@@ -797,6 +828,16 @@ func update_play(_dt: float) -> void:
 	map_mat.set_shader_parameter("alpha", 0.35 if g.pl.pos.y < -2.0 else 0.9)
 	map_over.queue_redraw()
 	# stamina
+	if g.pl.driving and g.pl.car != null:
+		# behind the wheel the bar is the car's condition
+		var h: float = 1.0 - g.pl.car.damage
+		stam_bg.modulate.a = 1.0
+		stam_bg.size.y = 5.0
+		stam_fg.size = Vector2(120.0 * h, 5.0)
+		stam_fg.color = DANGER if h < 0.4 else (SODIUM if h < 0.75 else TEXT)
+		return
+	stam_bg.size.y = 3.0
+	stam_fg.size.y = 3.0
 	var st := g.pl.stamina
 	stam_bg.modulate.a = move_toward(stam_bg.modulate.a, 1.0 if st < 0.99 else 0.0, _dt / 0.4)
 	stam_fg.size.x = 120.0 * st
@@ -878,7 +919,7 @@ func _touch_down(i: int, p: Vector2, vs: Vector2) -> void:
 			k += 1
 	if p.y < 70.0:
 		return
-	if p.x < vs.x * 0.46 and joy_id < 0 and touch:
+	if p.x < vs.x * 0.46 and joy_id < 0 and touch and not g.pl.driving:
 		joy_id = i
 		joy_center = p
 		_joy_move(p)
@@ -893,9 +934,10 @@ func _touch_up(i: int) -> void:
 		joy_knob = Vector2.ZERO
 		_layout()
 	looks.erase(i)
-	if btn_touch.get(i, "") == "sprint":
-		input.sprint = false
-		buttons.sprint.hold = false
+	var held: String = btn_touch.get(i, "")
+	if held in HOLD:
+		input[held] = false
+		buttons[held].hold = false
 		controls.queue_redraw()
 	btn_touch.erase(i)
 
@@ -911,9 +953,11 @@ func _joy_move(p: Vector2) -> void:
 func _press(n: String, i: int) -> void:
 	btn_touch[i] = n
 	match n:
-		"sprint":
-			input.sprint = true
-			buttons.sprint.hold = true
+		"sprint", "left", "right", "gas":
+			input[n] = true
+			buttons[n].hold = true
+		"exit":
+			g.do_interact()
 		"crouch":
 			if g.pl.driving:
 				g.horn()

@@ -64,6 +64,11 @@ func _make(i: int, s: Dictionary) -> Dictionary:
 		pos = Vector2(float(s.x), float(s.z)), yaw = float(s.ry), roll = 0.0, lift = 0.0, y = 0.0,
 		state = "parked", hp = HP, speed = 0.0, steer = 0.0, push = Vector2(), spin = 0.0,
 		tumble = {}, smoke = null, home = Vector2(float(s.x), float(s.z)),
+		# crash damage: 0 new .. 1 the engine is gone; dents are made in the car's own copies of its meshes
+		damage = 0.0, dent_t = 0.0, lamp_out = [false, false], pull = 1.0 if i % 2 == 0 else -1.0,
+		engine_smoke = null,
+		# shoved by the car you are driving: sliding to a stop
+		vel = Vector2(), spin_v = 0.0, slide_from = "parked",
 	}
 
 # ---------------------------------------------------------------- placing a car
@@ -186,7 +191,7 @@ func leave(c: Dictionary) -> void:
 		l.light_energy = 0.0
 	g.sfx.loop_to("engine_loop", 0.0, 0.3)
 	if c.state == "driven":
-		c.state = "parked"
+		c.state = "wreck" if c.damage >= 1.0 else "parked"
 		c.speed = 0.0
 		for m in c.meshes.get("head", []):
 			(m as MeshInstance3D).material_override = c.roles[m]
@@ -200,8 +205,11 @@ func drive(dt: float, throttle: float, steer: float, brake: bool, lights_on: boo
 	var c: Dictionary = driven
 	if c == null or c.state != "driven":
 		return
-	var top: float = TOP_SPEED.get(c.vm, 21.0) * (0.7 if c.hp < HP else 1.0)
+	var top: float = TOP_SPEED.get(c.vm, 21.0) * (0.7 if c.hp < HP else 1.0) * (1.0 - 0.4 * c.damage)
 	var sp: float = c.speed
+	var dead: bool = c.damage >= 1.0
+	if dead:
+		throttle = 0.0   # the engine is gone: it only rolls
 	if throttle > 0.05:
 		sp += (16.0 * throttle if sp < -0.3 else 7.5 * throttle * (1.0 - clampf(sp / top, 0.0, 1.0))) * dt
 	elif throttle < -0.05:
@@ -212,8 +220,12 @@ func drive(dt: float, throttle: float, steer: float, brake: bool, lights_on: boo
 	if brake:
 		sp = move_toward(sp, 0.0, 22.0 * dt)
 	c.speed = sp
-	c.steer = lerpf(c.steer, steer, minf(1.0, dt * 7.0))
-	var wheel: float = c.steer * 0.62 * (1.0 - 0.55 * clampf(absf(sp) / top, 0.0, 1.0))
+	# the wheel turns at a steady rate (full lock in a fifth of a second) and comes back faster, so
+	# the arrow buttons feel like a steering wheel; a badly damaged car pulls to one side
+	var want := clampf(steer + (0.12 * c.pull if c.damage > 0.5 else 0.0), -1.0, 1.0)
+	c.steer = move_toward(c.steer, want, dt * (5.0 if absf(want) > absf(c.steer) else 8.0))
+	# less lock the faster it goes (a sharp turn at speed would spin it round)
+	var wheel: float = c.steer * lerpf(0.6, 0.13, clampf(absf(sp) / TOP_SPEED.get(c.vm, 21.0), 0.0, 1.0))
 	c.yaw -= sp / WHEELBASE * tan(wheel) * dt * (1.6 if brake and absf(sp) > 6.0 else 1.0)
 	c.yaw += c.spin * dt
 	c.spin = move_toward(c.spin, 0.0, 3.0 * dt)
@@ -242,23 +254,48 @@ func drive(dt: float, throttle: float, steer: float, brake: bool, lights_on: boo
 		var ahead: Vector3 = t * Vector3(L.head.x + 12.0, L.head.y - 1.6, L.head.z * (k * 2 - 1))
 		if not p.is_equal_approx(ahead):
 			l.look_at(ahead)
-		l.light_energy = (4.0 if lights_on else 0.0) * (0.0 if g.daylight else 1.0)
+		l.light_energy = (4.0 if lights_on and not c.lamp_out[k] else 0.0) * (0.0 if g.daylight else 1.0)
 	var f01 := clampf(absf(c.speed) / top, 0.0, 1.0)
-	g.sfx.loop_to("engine_loop", 0.18 + 0.22 * f01, 0.15)
-	g.sfx.loop_pitch("engine_loop", 0.85 + 1.5 * f01 + (0.15 if throttle > 0.3 else 0.0))
+	if dead:
+		g.sfx.loop_to("engine_loop", 0.0, 0.4)
+	else:
+		g.sfx.loop_to("engine_loop", 0.18 + 0.22 * f01, 0.15)
+		# a damaged engine misfires
+		var rough: float = 0.12 * c.damage * sin(Time.get_ticks_msec() * 0.02) if c.damage > 0.4 else 0.0
+		g.sfx.loop_pitch("engine_loop", 0.85 + 1.5 * f01 + (0.15 if throttle > 0.3 else 0.0) + rough)
+	c.dent_t -= dt
 
-## Keeps the driven car out of walls and parked cars: three circles along its length.
+## Keeps the driven car out of walls and parked cars (three circles along its length). Cars it hits
+## are shoved and slide away; hard knocks dent it and add to its damage.
 func _collide_driven(c: Dictionary, vel: Vector2, dt: float) -> void:
 	var f := forward(c)
 	var r: float = c.size.z * 0.5
 	var off: float = c.size.x * 0.5 - r
 	var push := Vector2()
+	var at := Vector2()
 	for k in [-off, 0.0, off]:
 		var cc: Vector2 = c.pos + f * k
 		var p := g.col.collide(Vector3(cc.x, 0.0, cc.y), r, 0.3, 1.3, false)
 		var d := Vector2(p.x - cc.x, p.z - cc.y)
 		if d.length() > push.length():
 			push = d
+			at = cc
+	# a car it ran into: shove it (it takes some of the speed and goes sliding)
+	var hit_car: Dictionary = {}
+	if push.length() > 0.001:
+		for o in cars_hit(at - push.normalized() * r * 0.9, 0.6):
+			hit_car = o
+			break
+	if hit_car.size():
+		var n := push.normalized()
+		var closing := -vel.dot(n)
+		if closing > 1.0:
+			var heavy: bool = hit_car.state == "wreck"
+			var share := 0.35 if heavy else 0.6
+			var contact: Vector2 = at - n * r
+			shove(hit_car, -n * closing * share, (contact - (hit_car.pos as Vector2)).cross(-n) * closing * 0.06)
+			if closing > 9.0:
+				dent(hit_car, contact, -n, clampf(closing / 45.0, 0.05, 0.25))
 	# the T-Rex is solid too
 	var m := g.mon
 	var md := (c.pos as Vector2) - Vector2(m.pos.x, m.pos.z)
@@ -278,8 +315,9 @@ func _collide_driven(c: Dictionary, vel: Vector2, dt: float) -> void:
 	var n2 := push.normalized()
 	var impact := -vel.dot(n2)
 	if impact > 2.5:
-		c.speed *= 0.3
-		if impact > 9.0:
+		# a car takes the knock better than a wall: it keeps more of its speed
+		c.speed *= 0.55 if hit_car.size() else 0.3
+		if impact > 9.0 and hit_car.is_empty():
 			c.speed = -c.speed * 0.3
 		var v := clampf(impact / 18.0, 0.15, 1.0)
 		g.sfx.play("clang", 0.5 * v)
@@ -287,9 +325,152 @@ func _collide_driven(c: Dictionary, vel: Vector2, dt: float) -> void:
 			g.sfx.play("shatter", 0.5 * v)
 		g.pl.shake = maxf(g.pl.shake, v * 0.9)
 		g.buzz(int(30 + 120 * v))
+		take_damage(c, impact, at - n2 * r, n2)
 	else:
 		# scraping along: lose the speed going into the wall only
 		c.speed *= 1.0 - 3.0 * dt
+
+# ---------------------------------------------------------------- damage
+## A knock of impact m/s at world point p (x/z), pushing along n (unit, into the car): damage, a
+## dent there, a headlight out if it was the front, smoke from the engine, and at full damage the
+## engine dies.
+func take_damage(c: Dictionary, impact: float, p: Vector2, n: Vector2) -> void:
+	if impact < 4.0:
+		return
+	var was: float = c.damage
+	c.damage = minf(1.0, c.damage + (impact - 3.0) / 40.0)
+	if c.dent_t <= 0.0:
+		c.dent_t = 0.25
+		dent(c, p, n, clampf(impact / 50.0, 0.04, 0.3))
+	# which part of it: the front takes the headlights with it
+	var local := xform(c).affine_inverse() * Vector3(p.x, 0.6, p.y)
+	if local.x > c.size.x / c.sc * 0.3 and impact > 7.0:
+		c.lamp_out[0 if local.z < 0.0 else 1] = true
+		for m in c.meshes.get("head", []):
+			if c.lamp_out[0] and c.lamp_out[1]:
+				(m as MeshInstance3D).material_override = c.roles[m]
+	if c.damage >= 0.5 and c.engine_smoke == null:
+		var s := _make_smoke(10, 2.4)
+		s.position = Vector3(c.size.x / c.sc * 0.32, c.size.y / c.sc * 0.75, 0.0)
+		(c.node as Node3D).add_child(s)
+		c.engine_smoke = s
+	if c.damage >= 1.0 and was < 1.0:
+		g.sfx.play("boom", 0.4)
+		if c.state == "driven":
+			g.engine_dead()
+
+## Pushes the car's surfaces in around world point p (x/z, at bumper height) along n (unit): its
+## paint, glass, chrome and trim within about a metre move up to depth metres. The meshes are shared
+## by every car of the same model, so the first dent gives this car copies of its own.
+func dent(c: Dictionary, p: Vector2, n: Vector2, depth: float) -> void:
+	var root := c.node as Node3D
+	var t := xform(c)
+	var hit := t.affine_inverse() * Vector3(p.x, c.y + 0.7, p.y)
+	var dir := (t.basis.inverse() * Vector3(n.x, 0.0, n.y)).normalized()
+	var reach: float = 1.1 / c.sc
+	for role in ["paint", "glass", "chrome", "trim", "carbon", "head", "tail", "lens"]:
+		for mi in c.meshes.get(role, []):
+			var m := mi as MeshInstance3D
+			if not is_instance_valid(m) or not (m.mesh is ArrayMesh):
+				continue
+			if not m.has_meta("orig_mesh"):
+				m.set_meta("orig_mesh", m.mesh)
+				m.mesh = (m.mesh as ArrayMesh).duplicate()
+			# the hit and its direction in this mesh's own space (it may sit on a door hinge)
+			var to_car := m.transform
+			if m.get_parent() != root:
+				to_car = (m.get_parent() as Node3D).transform * m.transform
+			var inv := to_car.affine_inverse()
+			var hp := inv * hit
+			var hd := (inv.basis * dir).normalized()
+			var mesh := m.mesh as ArrayMesh
+			var surfaces := []
+			var touched := false
+			for s in mesh.get_surface_count():
+				var arrays := mesh.surface_get_arrays(s)
+				var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+				var nrm = arrays[Mesh.ARRAY_NORMAL]
+				var has_n: bool = nrm is PackedVector3Array and (nrm as PackedVector3Array).size() == v.size()
+				for k in v.size():
+					var d := v[k].distance_to(hp)
+					if d < reach:
+						var w: float = 1.0 - d / reach
+						# pushed in, and crumpled: a ripple across the panel, and the surface tilted every
+						# which way so the light picks the dent out (the normals would otherwise stay flat)
+						var crease := sin(v[k].x * 23.0 + v[k].y * 17.0) * sin(v[k].z * 19.0 - v[k].y * 13.0)
+						v[k] += hd * depth * (w * w + 0.35 * w * crease)
+						if has_n:
+							var jit := Vector3(sin(v[k].y * 31.0 + v[k].z * 7.0), sin(v[k].z * 29.0 + v[k].x * 11.0), sin(v[k].x * 37.0 + v[k].y * 5.0))
+							nrm[k] = ((nrm[k] as Vector3) + (hd * 0.9 + jit * 0.7) * w).normalized()
+						touched = true
+				arrays[Mesh.ARRAY_VERTEX] = v
+				if has_n:
+					arrays[Mesh.ARRAY_NORMAL] = nrm
+				surfaces.append(arrays)
+			if touched:
+				mesh.clear_surfaces()
+				for a in surfaces:
+					mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, a)
+
+## Undoes the dents (a new run).
+func _undent(c: Dictionary) -> void:
+	for role in c.meshes:
+		for mi in c.meshes[role]:
+			var m := mi as MeshInstance3D
+			if is_instance_valid(m) and m.has_meta("orig_mesh"):
+				m.mesh = m.get_meta("orig_mesh")
+				m.remove_meta("orig_mesh")
+
+# ---------------------------------------------------------------- shoved cars
+## The car you are driving ran into car c: it slides off at vel (x/z), turning at spin rad/s.
+func shove(c: Dictionary, vel: Vector2, spin: float) -> void:
+	if c.state == "tumble" or c.state == "driven":
+		return
+	if c.state != "slide":
+		c.slide_from = c.state
+	c.state = "slide"
+	c.vel = (c.vel as Vector2) + vel
+	c.spin_v = clampf(c.spin_v + spin, -3.0, 3.0)
+	if c.hinge:
+		(c.hinge as Node3D).rotation.y = 0.0
+	if c.alarm >= 0 and c.alarm < g.alarms.size() and g.alarms[c.alarm].cd <= 0.0:
+		g.trigger_alarm(g.alarms[c.alarm])
+
+## Cars sliding after a knock: skidding to a stop, glancing off walls and other cars.
+func _slides(dt: float) -> void:
+	for c in cars:
+		if c.state != "slide":
+			continue
+		c.pos += (c.vel as Vector2) * dt
+		c.yaw += c.spin_v * dt
+		c.vel = (c.vel as Vector2).move_toward(Vector2.ZERO, 7.5 * dt)
+		c.spin_v = move_toward(c.spin_v, 0.0, 4.0 * dt)
+		var f := forward(c)
+		var r: float = c.size.z * 0.5
+		var off: float = c.size.x * 0.5 - r
+		var push := Vector2()
+		for k in [-off, 0.0, off]:
+			var cc: Vector2 = c.pos + f * k
+			var p := g.col.collide(Vector3(cc.x, 0.0, cc.y), r, 0.3, 1.3, false, c.box)
+			var d := Vector2(p.x - cc.x, p.z - cc.y)
+			if d.length() > push.length():
+				push = d
+		if push.length() > 0.001:
+			c.pos += push
+			var n := push.normalized()
+			var vn: float = (c.vel as Vector2).dot(n)
+			if vn < 0.0:
+				c.vel = (c.vel as Vector2) - n * vn * 1.3
+				c.spin_v *= 0.6
+		c.pos.x = clampf(c.pos.x, -g.bound + 1.5, g.bound - 1.5)
+		c.pos.y = clampf(c.pos.y, -g.bound + 1.5, g.bound - 1.5)
+		_apply(c)
+		_place_box(c)
+		g.world.move_car_halos(c.i, xform(c), c.slide_from == "wreck")
+		if (c.vel as Vector2).length() < 0.12 and absf(c.spin_v) < 0.05:
+			c.vel = Vector2()
+			c.spin_v = 0.0
+			c.state = c.slide_from
 
 # ---------------------------------------------------------------- the T-Rex throws cars
 ## A parked car the T-Rex runs into while charging, or the car being driven when it bites: it is
@@ -301,6 +482,8 @@ func knock(c: Dictionary, dir: Vector2, k: float) -> void:
 	if c.box >= 0:
 		g.col.disable_box(c.box)
 	c.state = "tumble"
+	c.vel = Vector2()
+	c.spin_v = 0.0
 	var dist := 2.5 + 6.0 * k
 	var land: Vector2 = c.pos
 	var d := dist
@@ -332,6 +515,7 @@ func update(dt: float) -> void:
 	for c in cars:
 		if c.state == "tumble":
 			_tumble(c, dt)
+	_slides(dt)
 
 func _tumble(c: Dictionary, dt: float) -> void:
 	var T: Dictionary = c.tumble
@@ -381,9 +565,16 @@ func _land(c: Dictionary) -> void:
 func _smoke(c: Dictionary) -> void:
 	if c.smoke:
 		return
+	var p := _make_smoke(18, 4.0)
+	p.position = Vector3(c.pos.x, c.y + 0.8, c.pos.y)
+	g.add_child(p)
+	c.smoke = p
+
+## A column of grey smoke (amount puffs alive at once, each lasting life seconds).
+func _make_smoke(amount: int, life: float) -> GPUParticles3D:
 	var p := GPUParticles3D.new()
-	p.amount = 18
-	p.lifetime = 4.0
+	p.amount = amount
+	p.lifetime = life
 	p.local_coords = false
 	var m := ParticleProcessMaterial.new()
 	m.direction = Vector3(0, 1, 0)
@@ -417,11 +608,9 @@ func _smoke(c: Dictionary) -> void:
 	sm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	q.material = sm
 	p.draw_pass_1 = q
-	p.position = Vector3(c.pos.x, c.y + 0.8, c.pos.y)
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	p.visibility_aabb = AABB(Vector3(-4, -1, -4), Vector3(8, 14, 8))
-	g.add_child(p)
-	c.smoke = p
+	return p
 
 ## Cars the T-Rex's body (circle at p, radius r) is running into right now.
 func cars_hit(p: Vector2, r: float) -> Array:
@@ -467,6 +656,14 @@ func _to_home(c: Dictionary) -> void:
 	c.push = Vector2()
 	c.spin = 0.0
 	c.tumble = {}
+	c.vel = Vector2()
+	c.spin_v = 0.0
+	c.damage = 0.0
+	c.lamp_out = [false, false]
+	if c.engine_smoke:
+		(c.engine_smoke as Node).queue_free()
+		c.engine_smoke = null
+	_undent(c)
 	var wreck: bool = absf(c.roll) > 0.01
 	c.state = "wreck" if wreck else "parked"
 	c.lift = rest_lift(c) if wreck else 0.0

@@ -270,17 +270,24 @@ func update(dt: float) -> void:
 			trail.remove_at(0)
 			g.child.ti = maxi(0, g.child.ti - 1)
 
-## Behind the wheel: the stick (or WASD) is throttle and steering, SPRINT (or Space) the handbrake.
+## Behind the wheel. On a phone: the arrow buttons steer, GAS goes, BRAKE slows and then reverses.
+## With keys: WASD, Space the handbrake.
 func _drive(dt: float, inp: Dictionary) -> void:
 	var jx: float = inp.jx
 	var jy: float = inp.jy
+	if inp.left or inp.right:
+		jx = (1.0 if inp.right else 0.0) - (1.0 if inp.left else 0.0)
+	if inp.gas:
+		jy = 1.0
+	if inp.sprint:
+		jy = -1.0
 	if inp.kx != 0.0 or inp.ky != 0.0:
 		jx = inp.kx
 		jy = inp.ky
 	if g.phase != "explore" and g.phase != "escape":
 		jx = 0.0
 		jy = 0.0
-	g.veh.drive(dt, jy, jx, inp.sprint or inp.ksprint, car_lights)
+	g.veh.drive(dt, jy, jx, inp.ksprint, car_lights)
 	var c: Dictionary = car
 	pos = Vector3(c.pos.x, c.y, c.pos.y)
 	var f: Vector2 = g.veh.forward(c)

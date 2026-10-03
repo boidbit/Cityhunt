@@ -743,5 +743,27 @@
         "hz": 3800
       }
     ]
+  },
+  "engine_loop": {
+    "files": [
+      "engine_loop.wav"
+    ],
+    "loop": true,
+    "gain": [
+      0.5
+    ],
+    "source": "tools/getaway/make_sounds.py engine()",
+    "notes": "A seamless 2 s engine drone (48 Hz partials), shared with Getaway. Non-positional; the game raises its pitch with the speed of the car being driven.",
+    "durations": [
+      2.0
+    ],
+    "params": [
+      {
+        "seconds": 2.0
+      }
+    ],
+    "loop_end": [
+      88200
+    ]
   }
 }

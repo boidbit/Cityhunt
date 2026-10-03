@@ -3,6 +3,7 @@
 shader_type spatial;
 render_mode unshaded, blend_add, depth_draw_never, cull_disabled, fog_disabled, shadows_disabled;
 uniform float att = 0.0048;
+global uniform float daylight;
 varying vec3 col;
 varying float alpha;
 void vertex() {
@@ -21,5 +22,5 @@ void fragment() {
 	float r = dot(c, c) * 4.0;
 	float a = exp(-r * 9.0) + 0.28 * exp(-r * 2.2);
 	a *= 1.0 - smoothstep(0.75, 1.0, r);
-	ALBEDO = col * a * alpha;
+	ALBEDO = col * a * alpha * (1.0 - 0.8 * daylight);
 }

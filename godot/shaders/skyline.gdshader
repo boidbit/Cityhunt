@@ -4,6 +4,7 @@ render_mode unshaded, fog_disabled, shadows_disabled;
 uniform sampler2D emi : source_color, filter_linear_mipmap, repeat_enable;
 uniform vec3 hor = vec3(0.098, 0.098, 0.112);
 uniform float flash = 0.0;
+global uniform float daylight;
 varying float vf;
 varying float vy;
 void vertex() {
@@ -13,7 +14,7 @@ void vertex() {
 }
 void fragment() {
 	vec3 e = texture(emi, UV).rgb;
-	vec3 c = vec3(0.03, 0.032, 0.038) + e * 0.75;
+	vec3 c = mix(vec3(0.03, 0.032, 0.038) + e * 0.75, vec3(0.26, 0.28, 0.31) + e * 0.05, daylight);
 	float f = clamp(vf * 0.92 + (1.0 - smoothstep(0.0, 60.0, vy)) * 0.25, 0.0, 1.0);
 	ALBEDO = mix(c, hor, f) - flash * 0.02;
 }

@@ -88,6 +88,10 @@ jobs:
         working-directory: godot
         run: ~/godot/godot --headless --path . --fixed-fps 30 -s res://tests/man_test.gd
 
+      - name: Test cars, the T-Rex, flares, her phone and day/night
+        working-directory: godot
+        run: ~/godot/godot --headless --path . --fixed-fps 30 -s res://tests/drive_test.gd
+
       - name: Play full games automatically
         working-directory: godot
         run: |

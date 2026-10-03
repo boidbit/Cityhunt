@@ -29,7 +29,8 @@ Pull requests build the APK too. You can download it from the run's **Artifacts*
 
 ## Other versions in this repository
 
-- `godot/`: Lost City rebuilt in Godot 4.6 as a native Android app. Its APK is on the
+- `godot/`: Lost City rebuilt in Godot 4.6 as a native Android app, now with a T-Rex, cars you can
+  drive (and it can flip), her phone to ring, flares, an evacuated city and a day/night option. Its APK is on the
   [godot-apk-latest](https://github.com/talibmohd0099/Cityhunt/releases/tag/godot-apk-latest) release.
   See [godot/README.md](godot/README.md).
 - `getaway/`: Getaway, a one-thumb driving prototype that reuses Lost City's cars. Its APK is on the
@@ -74,4 +75,5 @@ All rights reserved. See [LICENSE](LICENSE). Third-party parts keep their own li
 - The Xbot rig and the brick/water textures come from the [three.js examples](https://github.com/mrdoob/three.js/tree/dev/examples) (MIT).
 - The Mercedes-Benz GLS 580 and Koenigsegg Agera models were supplied by the project owner (source files `uploads_files_2787791` and `uploads_files_2792345`), converted and simplified for the game. Car brand names and designs belong to their owners.
 - The Godot version's player character and his motion-captured animations come from [Microsoft Rocketbox](https://github.com/microsoft/microsoft-rocketbox) (MIT, see `godot/assets/player/LICENSE-rocketbox.txt`).
+- The Godot version's T-Rex is from the [Animated LowPoly Dinosaurs pack](https://quaternius.itch.io/animated-lowpoly-dinosaurs) by Quaternius (CC0, see `godot/assets/trex/License.txt`).
 - Fonts: Big Shoulders Display and Barlow (Google Fonts, OFL).

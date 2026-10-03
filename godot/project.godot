@@ -17,6 +17,7 @@ config/features=PackedStringArray("4.6", "Mobile")
 boot_splash/bg_color=Color(0.027, 0.031, 0.039, 1)
 boot_splash/show_image=false
 config/icon="res://icon.svg"
+config/quit_on_go_back=false
 
 [display]
 
@@ -54,6 +55,14 @@ lights_and_shadows/positional_shadow/atlas_size=2048
 
 [shader_globals]
 
+daylight={
+"type": "float",
+"value": 0.0
+}
+tremor={
+"type": "float",
+"value": 0.0
+}
 rain_amount={
 "type": "float",
 "value": 0.65

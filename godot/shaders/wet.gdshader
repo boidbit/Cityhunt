@@ -23,6 +23,7 @@ global uniform float rain_amount;
 global uniform sampler2D refl_tex : filter_linear;
 global uniform mat4 refl_vp;
 global uniform float refl_on;
+global uniform float tremor;     // the T-Rex's footfalls: rings spread across standing water
 varying vec3 wpos;
 varying vec3 wnrm;
 void vertex() {
@@ -66,6 +67,12 @@ void fragment() {
 	vec2 rn = (texture(ripple_tex, wpos.xz * 0.16 + vec2(TIME * 0.02, TIME * 0.013)).xy
 		+ texture(ripple_tex, wpos.xz * 0.29 - vec2(TIME * 0.017, -TIME * 0.028)).xy - 1.0) * rain_amount * up;
 	rn *= 0.35 + 0.65 * standing;
+	if (tremor > 0.01) {
+		vec2 cell = fract(wpos.xz * 0.6) - 0.5;
+		float rr = length(cell);
+		float ring = sin(rr * 55.0 - TIME * 22.0) * exp(-rr * 4.0);
+		rn += normalize(cell + 1e-4) * ring * tremor * (0.25 + 0.75 * standing) * up * 0.9;
+	}
 	vec3 nw = normalize(vec3(rn.x * 0.35 + dn.x, dn.y, rn.y * 0.35 + dn.z));
 	if (up > 0.0) NORMAL = normalize(mix(NORMAL, (VIEW_MATRIX * vec4(nw, 0.0)).xyz, up));
 	if (refl_on > 0.5) {
@@ -75,6 +82,8 @@ void fragment() {
 		ruv += rn * (0.006 + 0.02 * (1.0 - w)) + dn.xz * 0.035 * (1.0 - standing);
 		vec3 rc = texture(refl_tex, ruv).rgb;
 		float fres = 0.25 + 0.75 * pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 3.0);
-		EMISSION = rc * w * fres * 1.1;
+		// held a little below the real mirror image: full strength, a car and its reflection in a puddle
+		// merge from a distance and the car looks sunk into the road
+		EMISSION = min(rc, vec3(1.5)) * w * fres * 0.8;
 	}
 }

@@ -24,6 +24,12 @@ var trail: Array[Vector3] = []
 var lit := false
 var cr_a := 0.0
 var real_sp := 0.0
+# driving (the car itself is Vehicles' business)
+var driving := false
+var car = null
+var car_lights := true
+var stun_t := 0.0                   # dazed for a moment after being thrown out of a car
+var look_idle := 0.0                # seconds since the camera was last dragged (it swings back behind the car)
 
 # camera
 var cam_yaw := 0.0
@@ -150,6 +156,10 @@ func reset(start: Vector3) -> void:
 	flash = true
 	trail.clear()
 	step_acc = 0.0
+	driving = false
+	car = null
+	car_lights = true
+	stun_t = 0.0
 	cam_yaw = atan2(-start.x, -start.z)
 	yaw = cam_yaw
 	cam_pitch = 0.22
@@ -162,6 +172,9 @@ func reset(start: Vector3) -> void:
 
 func update(dt: float) -> void:
 	var inp: Dictionary = g.hud.input
+	if driving:
+		_drive(dt, inp)
+		return
 	var jx: float = inp.jx
 	var jy: float = inp.jy
 	var kx: float = inp.kx
@@ -173,6 +186,9 @@ func update(dt: float) -> void:
 		jy = ky / l * m
 	var mag := minf(1.0, U.hyp(jx, jy))
 	if g.phase == "dialog" or g.phase == "caught":
+		mag = 0.0
+	if stun_t > 0.0:
+		stun_t -= dt
 		mag = 0.0
 	var want_sprint: bool = (inp.sprint or inp.ksprint) and mag > 0.2 and not crouch
 	if hidden:
@@ -254,13 +270,46 @@ func update(dt: float) -> void:
 			trail.remove_at(0)
 			g.child.ti = maxi(0, g.child.ti - 1)
 
+## Behind the wheel: the stick (or WASD) is throttle and steering, SPRINT (or Space) the handbrake.
+func _drive(dt: float, inp: Dictionary) -> void:
+	var jx: float = inp.jx
+	var jy: float = inp.jy
+	if inp.kx != 0.0 or inp.ky != 0.0:
+		jx = inp.kx
+		jy = inp.ky
+	if g.phase != "explore" and g.phase != "escape":
+		jx = 0.0
+		jy = 0.0
+	g.veh.drive(dt, jy, jx, inp.sprint or inp.ksprint, car_lights)
+	var c: Dictionary = car
+	pos = Vector3(c.pos.x, c.y, c.pos.y)
+	var f: Vector2 = g.veh.forward(c)
+	yaw = atan2(f.x, f.y)
+	real_sp = absf(c.speed)
+	actor.position = pos
+	actor.rotation.y = yaw
+	stamina = minf(1.0, stamina + dt / 7.0)
+	exhaust = exhaust and stamina < 0.35
+	move = "still" if real_sp < 0.3 else "drive"
+	# the engine carries; idling it is quieter, and lights off and stopped it is just another car
+	noise = 0.0 if real_sp < 0.3 and not car_lights else 10.0 + real_sp * 1.6
+	if trail.is_empty() or U.hyp(trail[-1].x - pos.x, trail[-1].z - pos.z) > 0.7:
+		trail.append(pos)
+		if trail.size() > 400:
+			trail.remove_at(0)
+			g.child.ti = maxi(0, g.child.ti - 1)
+
 func update_camera(dt: float) -> void:
 	var inp: Dictionary = g.hud.input
 	var sens: float = (0.0058 if g.hud.touch else 0.005) * g.settings.sens / 100.0
 	cam_yaw -= inp.look_dx * sens
 	cam_pitch = clampf(cam_pitch + inp.look_dy * sens * 0.85, -0.5, 1.05)
+	look_idle = 0.0 if absf(inp.look_dx) + absf(inp.look_dy) > 0.5 else look_idle + dt
 	inp.look_dx = 0.0
 	inp.look_dy = 0.0
+	if driving and car != null:
+		_car_camera(dt)
+		return
 	if g.phase == "caught":
 		var want := atan2(g.mon.pos.x - pos.x, g.mon.pos.z - pos.z)
 		cam_yaw += U.ang_diff(cam_yaw, want) * minf(1.0, dt * 5.0)
@@ -299,6 +348,8 @@ func update_camera(dt: float) -> void:
 		if r != null:
 			p.y = minf(p.y, float(r.ceil))
 		p.y = maxf(p.y, g.world.ground_at(p.x, p.z, pos.y) + 0.25)
+	if pos.y > -2.0:
+		p = _out_of_rex(p, f)
 	if shake > 0.0:
 		var s := shake * 0.09
 		p += Vector3(U.rnd(-s, s), U.rnd(-s, s), U.rnd(-s, s))
@@ -311,8 +362,68 @@ func update_camera(dt: float) -> void:
 	g.cam.rotate_object_local(Vector3.UP, (sin(cam_t * 0.61 + 1.3) + 0.5 * sin(cam_t * 1.37)) * sw)
 	g.cam.fov = fov_base + 5.0 * cam_run
 
+## Chase camera behind the car: it swings round behind the car as it drives unless you have just
+## dragged it to look about, and pulls back with speed.
+func _car_camera(dt: float) -> void:
+	var c: Dictionary = car
+	var f: Vector2 = g.veh.forward(c)
+	var heading := atan2(f.x, f.y)
+	if c.speed < -1.0:
+		heading = atan2(-f.x, -f.y) if look_idle > 1.5 else heading
+	if look_idle > 1.0 and (absf(c.speed) > 1.0 or c.state == "tumble"):
+		cam_yaw += U.ang_diff(cam_yaw, heading) * minf(1.0, dt * 2.5)
+		cam_pitch = lerpf(cam_pitch, 0.2, minf(1.0, dt * 1.5))
+	cam_t += dt
+	var cp := cos(cam_pitch)
+	var sp := sin(cam_pitch)
+	var fw := Vector3(sin(cam_yaw) * cp, -sp, cos(cam_yaw) * cp)
+	cam_fwd = fw
+	var goal := Vector3(c.pos.x, c.y + 1.5 + c.lift * 0.5, c.pos.y)
+	if cam_piv.distance_to(goal) > 6.0:
+		cam_piv = goal
+	cam_piv = cam_piv.lerp(goal, 1.0 - exp(-dt / 0.05))
+	var top: float = Vehicles.TOP_SPEED.get(c.vm, 21.0)
+	cam_run = lerpf(cam_run, clampf(absf(c.speed) / top, 0.0, 1.0), 1.0 - exp(-dt / 0.6))
+	var flying: bool = c.state == "tumble"
+	if flying:
+		# pull back and up to watch it go over, from the side away from the T-Rex (so it is in view)
+		cam_pitch = lerpf(cam_pitch, 0.32, minf(1.0, dt * 3.0))
+		var toward := atan2(g.mon.pos.x - c.pos.x, g.mon.pos.z - c.pos.y)
+		cam_yaw += U.ang_diff(cam_yaw, toward) * minf(1.0, dt * 4.0)
+	var dist := (8.0 if flying else 6.6) + 2.0 * cam_run
+	var tgt := cam_piv + Vector3(0, 0.3, 0)
+	var want := tgt - fw * dist
+	var t := g.col.ray3(cam_piv, want, 0.25)
+	var d := maxf(1.2, dist * t - 0.2)
+	cam_cur = d if d < cam_cur else lerpf(cam_cur, d, minf(1.0, dt * 2.5))
+	var p := tgt - fw * cam_cur
+	p.y = maxf(p.y, g.world.ground_at(p.x, p.z, 0.0) + 0.4)
+	p = _out_of_rex(p, fw)
+	if shake > 0.0:
+		var s := shake * 0.12
+		p += Vector3(U.rnd(-s, s), U.rnd(-s, s), U.rnd(-s, s))
+		shake = maxf(0.0, shake - dt * 2.2)
+	g.cam.position = p
+	g.cam.look_at(tgt + fw * 10.0)
+	g.cam.fov = fov_base + 8.0 * cam_run
+
+## Keeps the camera out of the T-Rex: a capsule along its body, tail to snout, about its middle.
+func _out_of_rex(p: Vector3, fw: Vector3) -> Vector3:
+	var m := g.mon
+	var ax := Vector3(sin(m.yaw), 0.0, cos(m.yaw))
+	var a := Vector3(m.pos.x, 3.0, m.pos.z) - ax * 5.5
+	var b := Vector3(m.pos.x, 3.4, m.pos.z) + ax * 4.8
+	var ab := b - a
+	var u := clampf((p - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
+	var q := a + ab * u
+	var away := p - q
+	var r := 3.4
+	if away.length() < r:
+		p = q + (away.normalized() if away.length() > 0.01 else -fw) * r
+	return p
+
 func update_flash(dt: float, t: float) -> void:
-	var on := flash and g.phase in ["explore", "escape", "dialog", "caught"]
+	var on := flash and not driving and g.phase in ["explore", "escape", "dialog", "caught"]
 	# the beam leaves the torch on his chest and points where the camera looks; it bobs with his steps
 	var h := torch.global_transform * Vector3(0.0, 0.0, 0.06) if torch else pos + Vector3(0.0, 1.3, 0.0)
 	var ap := cam_pitch * 0.85 - 0.02

@@ -10,6 +10,7 @@ uniform sampler2D streaks : filter_linear_mipmap, repeat_enable;
 uniform float emi_strength = 1.0;
 uniform float brick_on = 1.0;
 global uniform float rain_amount;
+global uniform float daylight;
 #include "res://shaders/refl_clip.gdshaderinc"
 varying float wy;
 void vertex() {
@@ -39,7 +40,7 @@ void fragment() {
 	ROUGHNESS = mix(mix(0.84, 0.4, wet), 0.06, glass);
 	METALLIC = 0.05;
 	SPECULAR = mix(0.5, 0.9, glass);
-	EMISSION = texture(facade_emi, UV).rgb * emi_strength;
+	EMISSION = texture(facade_emi, UV).rgb * emi_strength * (1.0 - 0.94 * daylight);
 	// brick relief, in the wall's own texture directions (fades out where the bricks get too small)
 	float relief = wall * (0.35 + 0.65 * amt) * (1.0 - smoothstep(0.04, 0.15, d));
 	if (relief > 0.001) {

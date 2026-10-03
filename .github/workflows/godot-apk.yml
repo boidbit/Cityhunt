@@ -90,7 +90,13 @@ jobs:
 
       - name: Test cars, the T-Rex, flares, her phone and day/night
         working-directory: godot
-        run: ~/godot/godot --headless --path . --fixed-fps 30 -s res://tests/drive_test.gd
+        run: |
+          set -o pipefail
+          # failed checks and script errors are also raised as annotations, readable on the run page
+          status=0
+          ~/godot/godot --headless --path . --fixed-fps 30 -s res://tests/drive_test.gd 2>&1 | tee drive.log || status=$?
+          grep -E "FAIL|SCRIPT ERROR|^ERROR" drive.log | head -20 | sed "s/^/::error title=drive_test::/" || true
+          exit $status
 
       - name: Play full games automatically
         working-directory: godot

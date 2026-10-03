@@ -17,6 +17,8 @@ var other: Dictionary
 var walk_t := 0.0
 
 func _initialize() -> void:
+	# the same run every time (where she hides, the weather, how cars tumble)
+	seed(20261003)
 	root.add_child(load("res://scenes/main.tscn").instantiate())
 
 func check(ok: bool, what: String) -> void:

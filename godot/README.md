@@ -6,10 +6,14 @@ Lost City rebuilt in Godot 4.6 as a native Android app. It started as a port of 
 - **A T-Rex** hunts the city instead of the old creature. It sees movement: stand still and it only
   notices you close up (or in your torch beam). The ground shakes and puddles ripple under its steps
   well before it is in sight. It is too big for doorways, alleys and the subway.
-- **Cars you can drive.** Any parked car that isn't a wreck: USE beside it to get in. The engine and
-  headlights draw the T-Rex; it chases cars, shoves the one you are in, then throws it over and you
-  crawl out. Charging, it throws parked cars out of its way. The horn calls it to you (useful to lure
-  it somewhere). With her in the car, driving to the barricade gets you both out.
+- **Cars you can drive.** Any parked car that isn't a wreck: USE beside it to get in. On a phone the
+  arrow buttons (bottom left) steer and GAS and BRAKE (bottom right) drive; BRAKE backs it up once
+  it has stopped. Cars you run into are shoved and slide away. Hard knocks dent the car, can take out
+  a headlight, slow it, make it pull to one side and smoke, and enough of them kill the engine (the
+  bar at the bottom shows how much it can take). The engine and headlights draw the T-Rex; it chases
+  cars, shoves the one you are in, then throws it over and you crawl out. Charging, it throws parked
+  cars out of its way. The horn calls it to you (useful to lure it somewhere). With her in the car,
+  driving to the barricade gets you both out.
 - **Finding her:** her phone's last known area is marked on the minimap and shrinks with each clue.
   CALL rings her phone: you hear which way it rings, the area narrows, but the T-Rex may hear it too.
   Her trail (a note, her backpack, her rabbit, her footprints) leads from near where you start to her
@@ -66,9 +70,10 @@ and High fix it (render resolution, reflections, glow, flashlight shadow, how fa
 - `tests/autoplay.gd`: plays whole games by itself and checks each step (runs on every build)
 - `tests/man_test.gd`: walks, runs, stops, turns and crouches the player and checks the speed builds
   up and dies down over time, turns take a curve and feet on the ground don't slide (runs on every build)
-- `tests/drive_test.gd`: drives a car, crashes it into a wall, gets out, has the T-Rex throw it and
-  plough through a parked one, escapes with her by car, throws a flare, rings her phone, switches day
-  and night, and checks the T-Rex misses someone standing still but not someone moving (runs on every build)
+- `tests/drive_test.gd`: drives a car (stick and the phone buttons), crashes it into a wall, gets out,
+  has the T-Rex throw it and plough through a parked one, escapes with her by car, shoves a parked car,
+  dents and wrecks a car, throws a flare, rings her phone, switches day and night, and checks the
+  T-Rex misses someone standing still but not someone moving (runs on every build)
 
 ## Run the automatic test
 

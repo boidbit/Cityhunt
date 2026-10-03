@@ -107,7 +107,7 @@ func _process(dt: float) -> bool:
 		if m.get_child_count():
 			g = m.get_child(0) as Game
 		return false
-	if stage > 0 and stage < 9:
+	if (stage > 0 and stage < 9) or stage >= 19:
 		park_rex()
 	var inp: Dictionary = g.hud.input
 	match stage:
@@ -319,9 +319,120 @@ func _process(dt: float) -> bool:
 			g.mon.pause_t = 999.0
 			g.pl.cam_yaw = g.mon.yaw + PI * 0.5
 			inp.jy = 0.6
-			if t < 1.5:
+			# (he speeds up gradually, so give it a few seconds)
+			if g.mon.awareness <= 0.3 and g.mon.state == "PATROL" and t < 4.0:
 				return false
 			inp.jy = 0.0
 			check(g.mon.awareness > 0.3 or g.mon.state != "PATROL", "it notices the same person moving (awareness %.2f, %s)" % [g.mon.awareness, g.mon.state])
+			next()
+		19:
+			# the phone buttons: GAS, the arrows, BRAKE
+			if g.phase != "explore":
+				g.start_game()
+			car = open_car()
+			var p: Vector2 = g.veh.exit_point(car)
+			g.pl.pos = Vector3(p.x, 0.0, p.y)
+			g.enter_car(car)
+			inp.gas = true
+			next()
+		20:
+			if t < 1.5:
+				return false
+			check(car.speed > 4.0, "GAS drives it (%.1f m/s)" % car.speed)
+			inp.gas = false
+			mark2 = car.yaw
+			inp.right = true
+			next()
+		21:
+			if t < 0.6:
+				return false
+			check(U.ang_diff(mark2, car.yaw) < -0.05, "the right arrow turns it right (%.2f rad)" % U.ang_diff(mark2, car.yaw))
+			inp.right = false
+			mark2 = car.yaw
+			inp.left = true
+			next()
+		22:
+			if t < 0.6:
+				return false
+			check(U.ang_diff(mark2, car.yaw) > 0.05, "the left arrow turns it left (%.2f rad)" % U.ang_diff(mark2, car.yaw))
+			inp.left = false
+			inp.sprint = true
+			next()
+		23:
+			if t < 2.5:
+				return false
+			check(car.speed < -0.5, "BRAKE stops it, then backs it up (%.1f m/s)" % car.speed)
+			inp.sprint = false
+			# drive it into the side of a parked car
+			other = {}
+			for o in g.veh.cars:
+				if o.state == "parked" and o != car:
+					var fw: Vector2 = g.veh.forward(o)
+					var side := Vector2(-fw.y, fw.x)
+					var from: Vector2 = o.pos + side * 7.5
+					var ok := true
+					for k in range(0, 5):
+						var q := from - side * k
+						if not g.col.walkable(q.x, q.y, 1.2):
+							ok = false
+					if ok:
+						other = o
+						car.pos = from
+						car.yaw = atan2(side.y, -side.x)
+						break
+			check(other.size() > 0, "found a parked car to drive into")
+			mark = other.pos
+			car.speed = 13.0
+			inp.gas = true
+			next()
+		24:
+			if other.state == "parked" and t < 3.0:
+				return false
+			inp.gas = false
+			check(other.state == "slide" or (other.pos as Vector2).distance_to(mark) > 0.3, "the car it hits is shoved (%s, moved %.1f m)" % [other.state, (other.pos as Vector2).distance_to(mark)])
+			check(car.damage > 0.05, "the crash damages the car (%.2f)" % car.damage)
+			var dented := false
+			for role in car.meshes:
+				for m in car.meshes[role]:
+					if (m as Node).has_meta("orig_mesh"):
+						dented = true
+			check(dented, "and dents it")
+			next()
+		25:
+			if other.state == "slide" and t < 6.0:
+				return false
+			check(other.state == "parked" and (other.pos as Vector2).distance_to(mark) > 0.5, "it slides to a stop somewhere else (%.1f m)" % (other.pos as Vector2).distance_to(mark))
+			check(g.col.box_on(other.box), "solid where it stopped")
+			# one more knock finishes the engine
+			var spot := _facing_wall()
+			car.pos = spot.p
+			car.yaw = atan2(-spot.dir.y, spot.dir.x)
+			car.damage = 0.95
+			car.speed = 14.0
+			inp.gas = true
+			next()
+		26:
+			if t < 2.5:
+				return false
+			check(car.damage >= 1.0, "the crash finishes the engine (damage %.2f)" % car.damage)
+			car.pos = _facing_wall().p
+			car.speed = 0.0
+			next()
+		27:
+			if t < 1.5:
+				return false
+			check(absf(car.speed) < 0.5, "a dead engine won't go (%.1f m/s)" % car.speed)
+			inp.gas = false
+			g.do_interact()
+			check(not g.pl.driving and car.state == "wreck", "getting out leaves a wreck (%s)" % car.state)
+			var near = g.veh.near_car(g.pl.pos.x, g.pl.pos.z)
+			check(near == null or not is_same(near, car), "which can no longer be driven")
+			g.start_game()
+			var clean: bool = car.damage == 0.0
+			for role in car.meshes:
+				for m in car.meshes[role]:
+					if (m as Node).has_meta("orig_mesh"):
+						clean = false
+			check(clean and car.state == "parked", "a new run mends it")
 			finish()
 	return false

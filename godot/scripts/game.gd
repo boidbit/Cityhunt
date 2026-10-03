@@ -846,6 +846,8 @@ func car_bitten(dir: Vector2) -> void:
 	c.hp -= 1
 	buzz(200)
 	pl.shake = 1.0
+	# its teeth leave their mark on the side it bit
+	veh.take_damage(c, 16.0, (c.pos as Vector2) - dir * c.size.z * 0.5, dir)
 	if c.hp <= 0:
 		veh.knock(c, dir, 1.0)
 		# it stands over the wreck a moment (a roar): long enough to crawl out and run
@@ -873,6 +875,11 @@ func thrown_out(c: Dictionary) -> void:
 		child.state = "scared"
 		child.scared_t = 3.0
 	hud.sub("YOU", "Get up. Get up and run.", 2.2)
+
+## The car you are in took one knock too many.
+func engine_dead() -> void:
+	hud.sub("YOU", "No, no, no… it's dead. Out. Now.", 2.6)
+	buzz(120)
 
 func horn() -> void:
 	if not pl.driving:

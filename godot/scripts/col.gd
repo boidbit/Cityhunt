@@ -90,12 +90,12 @@ func near(ax: float, az: float, bx: float, bz: float) -> PackedInt32Array:
 	return out
 
 ## Pushes a standing circle (radius r, from height yb to yt) out of the boxes. Monster-only barriers
-## stop only the monster.
-func collide(p: Vector3, r: float, yb: float, yt: float, is_mon: bool) -> Vector3:
+## stop only the monster. skip: a box to ignore (a moving car's own).
+func collide(p: Vector3, r: float, yb: float, yt: float, is_mon: bool, skip := -1) -> Vector3:
 	var list := near(p.x - r, p.z - r, p.x + r, p.z + r)
 	for it in 2:
 		for i in list:
-			if flags[i] & F_MON and not is_mon:
+			if i == skip or (flags[i] & F_MON and not is_mon):
 				continue
 			if y1[i] <= yb or y0[i] >= yt:
 				continue

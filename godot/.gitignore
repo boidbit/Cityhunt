@@ -2,3 +2,6 @@
 .godot/
 # local export output
 /build/
+# downloaded asset packs: only the files the game uses are kept (see assets/trex)
+/assets/*.zip
+/assets/*.rar

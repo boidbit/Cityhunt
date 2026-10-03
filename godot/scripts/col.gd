@@ -32,6 +32,10 @@ func add_box(ax0: float, ax1: float, ay0: float, ay1: float, az0: float, az1: fl
 	z0.append(minf(az0, az1)); z1.append(maxf(az0, az1))
 	flags.append(f)
 	stamp.append(0)
+	_grid_add(i)
+	return i
+
+func _grid_add(i: int) -> void:
 	for gx in range(floori(x0[i] / CELL), floori(x1[i] / CELL) + 1):
 		for gz in range(floori(z0[i] / CELL), floori(z1[i] / CELL) + 1):
 			var k := Vector2i(gx, gz)
@@ -40,7 +44,35 @@ func add_box(ax0: float, ax1: float, ay0: float, ay1: float, az0: float, az1: fl
 			var arr: PackedInt32Array = grid[k]
 			arr.append(i)
 			grid[k] = arr
-	return i
+
+func _grid_remove(i: int) -> void:
+	for gx in range(floori(x0[i] / CELL), floori(x1[i] / CELL) + 1):
+		for gz in range(floori(z0[i] / CELL), floori(z1[i] / CELL) + 1):
+			var k := Vector2i(gx, gz)
+			if not grid.has(k):
+				continue
+			var arr: PackedInt32Array = grid[k]
+			var at := arr.find(i)
+			if at >= 0:
+				arr.remove_at(at)
+				grid[k] = arr
+
+## Moves box i somewhere else (the boxes of cars that drive off or get thrown).
+func set_box(i: int, ax0: float, ax1: float, ay0: float, ay1: float, az0: float, az1: float) -> void:
+	_grid_remove(i)
+	x0[i] = minf(ax0, ax1); x1[i] = maxf(ax0, ax1)
+	y0[i] = ay0; y1[i] = ay1
+	z0[i] = minf(az0, az1); z1[i] = maxf(az0, az1)
+	_grid_add(i)
+
+## Takes box i out of every query until set_box puts it back (a car while it is driven or flying).
+func disable_box(i: int) -> void:
+	_grid_remove(i)
+
+## Box index i still collides (it is in the grid).
+func box_on(i: int) -> bool:
+	var arr = grid.get(Vector2i(floori(x0[i] / CELL), floori(z0[i] / CELL)))
+	return arr != null and (arr as PackedInt32Array).has(i)
 
 ## Box indices whose grid cells overlap the rectangle, each once.
 func near(ax: float, az: float, bx: float, bz: float) -> PackedInt32Array:

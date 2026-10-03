@@ -338,7 +338,7 @@ func _build_play() -> void:
 	controls.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	controls.draw.connect(_draw_controls)
 	play.add_child(controls)
-	for n in ["crouch", "light", "sprint", "use"]:
+	for n in ["crouch", "light", "sprint", "use", "flare", "call"]:
 		buttons[n] = {rect = Rect2(), on = n == "light", hold = false, ready = false, dim = n == "use"}
 
 func _layout() -> void:
@@ -386,6 +386,8 @@ func _layout() -> void:
 	buttons.sprint.rect = Rect2(br - Vector2(122 + 76, 18 + 76), Vector2(76, 76))
 	buttons.light.rect = Rect2(br - Vector2(112 + 64, 112 + 64), Vector2(64, 64))
 	buttons.crouch.rect = Rect2(br - Vector2(24 + 66, 128 + 66), Vector2(66, 66))
+	buttons.flare.rect = Rect2(br - Vector2(196 + 58, 110 + 58), Vector2(58, 58))
+	buttons.call.rect = Rect2(br - Vector2(188 + 54, 186 + 54), Vector2(54, 54))
 	if joy_id < 0:
 		joy_center = Vector2(92.0 + safe.position.x, vs.y - 120.0 - B)
 	for s in screens.values():
@@ -452,6 +454,38 @@ func _draw_map_over() -> void:
 	var to_map := func(x: float, z: float) -> Vector2:
 		return ctr + Vector2(x - P.x, z - P.z).rotated(th) * zoom
 	map_over.draw_circle(ctr, R - 0.5, LINE, false, 1.0, true)
+	if g.phase == "explore" and g.search.r > 0.0:
+		# the area her phone was last placed in: the part of its edge that is on the map, or an
+		# arrow at the rim pointing to it
+		var sc: Vector2 = to_map.call(g.search.c.x, g.search.c.y)
+		var sr: float = g.search.r * zoom
+		var pts := PackedVector2Array()
+		for k in 65:
+			var q := sc + Vector2.from_angle(TAU * k / 64.0) * sr
+			if q.distance_to(ctr) < R - 1.5:
+				pts.append(q)
+			elif pts.size() > 1:
+				map_over.draw_polyline(pts, Color(SODIUM, 0.9), 1.6, true)
+				pts = PackedVector2Array()
+			else:
+				pts = PackedVector2Array()
+		if pts.size() > 1:
+			map_over.draw_polyline(pts, Color(SODIUM, 0.9), 1.6, true)
+		var inside: bool = Vector2(g.pl.pos.x, g.pl.pos.z).distance_to(g.search.c) < g.search.r
+		if not inside and sc.distance_to(ctr) > R - 6.0:
+			var e := (sc - ctr).normalized()
+			var tip := ctr + e * (R - 3.0)
+			var side := Vector2(-e.y, e.x)
+			map_over.draw_colored_polygon(PackedVector2Array([tip, tip - e * 7.0 + side * 4.0, tip - e * 7.0 - side * 4.0]), SODIUM)
+		# the next thing on her trail
+		var nc: Dictionary = g.next_clue()
+		if nc.size():
+			var q: Vector2 = to_map.call(nc.x, nc.z)
+			if q.distance_to(ctr) > R - 5.0:
+				q = ctr + (q - ctr).normalized() * (R - 5.0)
+			var pulse := 0.65 + 0.35 * sin(g.time * 5.0)
+			map_over.draw_circle(q, 3.2, Color(1.0, 0.95, 0.82, pulse), false, 1.4, true)
+			map_over.draw_circle(q, 1.2, Color(1.0, 0.95, 0.82, pulse))
 	var C := g.child
 	if C.state in ["follow", "wait", "scared"]:
 		var p: Vector2 = to_map.call(C.pos.x, C.pos.z)
@@ -530,6 +564,37 @@ func _icon(n: String, c: Vector2, col: Color) -> void:
 		"use":
 			var hand := [[8, 13], [8, 6], [8.2, 5.2], [9.5, 4.5], [10.8, 5.2], [11, 6], [11, 11], [11, 4.5], [11.2, 3.7], [12.5, 3], [13.8, 3.7], [14, 4.5], [14, 11], [14, 6], [14.2, 5.2], [15.5, 4.5], [16.8, 5.2], [17, 6], [17, 13], [16.6, 16], [15, 18.6], [11, 20], [8, 19], [5, 15], [3.5, 12.5], [3.6, 11.4], [4.6, 10.9], [5.8, 11], [8, 13]]
 			controls.draw_polyline(P.call(hand), col, w, true)
+		"drive":
+			# a steering wheel
+			controls.draw_arc(o + Vector2(12, 12) * s, 8.0 * s, 0, TAU, 24, col, w, true)
+			controls.draw_arc(o + Vector2(12, 12) * s, 2.2 * s, 0, TAU, 12, col, w, true)
+			controls.draw_polyline(P.call([[4, 12], [9.8, 12]]), col, w, true)
+			controls.draw_polyline(P.call([[14.2, 12], [20, 12]]), col, w, true)
+			controls.draw_polyline(P.call([[12, 14.2], [12, 20]]), col, w, true)
+		"exit":
+			controls.draw_polyline(P.call([[13, 4], [5, 4], [5, 20], [13, 20]]), col, w, true)
+			controls.draw_polyline(P.call([[10, 12], [21, 12]]), col, w, true)
+			controls.draw_polyline(P.call([[17, 8], [21, 12], [17, 16]]), col, w, true)
+		"flare":
+			controls.draw_polyline(P.call([[7, 20], [15, 9]]), col, w + 1.0, true)
+			for a in [[16, 4], [20, 6], [21, 10], [12, 4]]:
+				controls.draw_polyline(P.call([[16.5, 7.5], a]), col, w * 0.8, true)
+		"call":
+			controls.draw_polyline(P.call([[6, 4], [9, 4], [11, 9], [9, 11], [13, 15], [15, 13], [20, 15], [20, 18], [17, 20], [11, 18], [6, 13], [4, 7], [6, 4]]), col, w, true)
+		"horn":
+			controls.draw_polyline(P.call([[4, 9], [8, 9], [14, 4], [14, 20], [8, 15], [4, 15], [4, 9]]), col, w, true)
+			controls.draw_arc(o + Vector2(15, 12) * s, 4.0 * s, -0.9, 0.9, 8, col, w, true)
+			controls.draw_arc(o + Vector2(15, 12) * s, 7.5 * s, -0.9, 0.9, 10, col, w, true)
+		"brake":
+			controls.draw_arc(o + Vector2(12, 12) * s, 7.0 * s, 0, TAU, 24, col, w, true)
+			controls.draw_arc(o + Vector2(12, 12) * s, 10.0 * s, 0.6, 2.54, 10, col, w, true)
+			controls.draw_arc(o + Vector2(12, 12) * s, 10.0 * s, 3.74, 5.68, 10, col, w, true)
+			controls.draw_polyline(P.call([[12, 8], [12, 13]]), col, w, true)
+			controls.draw_circle(o + Vector2(12, 16) * s, 1.0 * s, col)
+		"lights":
+			controls.draw_polyline(P.call([[11, 6], [6, 6], [4, 12], [6, 18], [11, 18], [11, 6]]), col, w, true)
+			for y in [7, 10.5, 14, 17.5]:
+				controls.draw_polyline(P.call([[14, y - 1.0], [21, y + 0.5]]), col, w * 0.85, true)
 
 func _draw_controls() -> void:
 	if not touch:
@@ -541,9 +606,16 @@ func _draw_controls() -> void:
 	controls.draw_circle(joy_center, 66, Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.22 * base_a), false, 1.5, true)
 	controls.draw_circle(joy_center + joy_knob, 29, Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.28 * base_a))
 	controls.draw_circle(joy_center + joy_knob, 29, Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.45 * base_a), false, 1.5, true)
-	# round buttons
-	var labels := {crouch = "CROUCH", light = "LIGHT", sprint = "SPRINT", use = use_label}
+	# round buttons (behind the wheel the same four drive the car)
+	var driving: bool = g.pl.driving
+	var labels := {crouch = "CROUCH", light = "LIGHT", sprint = "SPRINT", use = use_label, flare = "FLARE %d" % flare_n, call = "CALL"}
+	var icons := {crouch = "crouch", light = "light", sprint = "sprint", use = "drive" if use_label == "DRIVE" else ("exit" if use_label == "EXIT" else "use"), flare = "flare", call = "call"}
+	if driving:
+		labels.merge({crouch = "HORN", light = "LIGHTS", sprint = "BRAKE"}, true)
+		icons.merge({crouch = "horn", light = "lights", sprint = "brake"}, true)
 	for n in buttons:
+		if not _shown(n):
+			continue
 		var b: Dictionary = buttons[n]
 		var r: Rect2 = b.rect
 		var c := r.get_center()
@@ -565,18 +637,46 @@ func _draw_controls() -> void:
 				fg = Color("15110a")
 			elif b.dim:
 				alpha = 0.4
+		if n == "flare" and flare_n <= 0:
+			alpha = 0.35
+		if n == "call" and call_wait > 0.0:
+			alpha = 0.55
+		if driving and n == "crouch":
+			edge = Color(221 / 255.0, 225 / 255.0, 230 / 255.0, 0.3)
+			fg = TEXT
+			fill = Color(10 / 255.0, 12 / 255.0, 15 / 255.0, 0.42)
 		fill.a *= alpha
 		edge.a *= alpha
 		fg.a *= alpha
 		controls.draw_circle(c, rad, fill)
 		controls.draw_circle(c, rad - 0.75, edge, false, 1.5, true)
-		_icon(n, c - Vector2(0, 7), fg)
+		if n == "call" and call_wait > 0.0:
+			# how long until it can ring again
+			controls.draw_arc(c, rad - 3.0, -PI * 0.5, -PI * 0.5 + TAU * (1.0 - call_wait / g.CALL_WAIT), 32, SODIUM, 2.5, true)
+		_icon(icons[n], c - Vector2(0, 7), fg)
 		var t: String = labels[n]
 		var font := _spaced(f_cond_b, 0.14, 11)
 		var sz := font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, 11)
 		controls.draw_string(font, c + Vector2(-sz.x / 2.0, 18), t, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, fg)
 
+## Which round buttons are on screen now: the flare on foot, the phone while she is still to be found.
+func _shown(n: String) -> bool:
+	match n:
+		"flare":
+			return not g.pl.driving
+		"call":
+			return g.phase == "explore"
+	return true
+
 # ---------------------------------------------------------------- API for the game
+var flare_n := 1
+var call_wait := 0.0
+var drawn_driving := false
+
+func set_flares(n: int) -> void:
+	flare_n = n
+	controls.queue_redraw()
+
 func sub(who: String, text: String, dur := 3.0) -> void:
 	subs.text = "[center][font=%s][font_size=16][color=#e9a444]%s[/color][/font_size][/font]  %s[/center]" % [f_cond_b.resource_path, who, text]
 	subs.modulate.a = 1.0
@@ -681,6 +781,11 @@ func update_play(_dt: float) -> void:
 	cur_act = g.find_interact() if g.phase == "explore" or g.phase == "escape" else {}
 	var lbl: String = cur_act.label if cur_act.size() else "USE"
 	var rdy := cur_act.size() > 0
+	var cw := g.call_t if g.phase == "explore" else 0.0
+	if absf(cw - call_wait) > 0.25 or (cw == 0.0 and call_wait != 0.0) or drawn_driving != g.pl.driving:
+		call_wait = cw
+		drawn_driving = g.pl.driving
+		controls.queue_redraw()
 	if lbl != use_label or rdy != buttons.use.ready:
 		use_label = lbl
 		buttons.use.ready = rdy
@@ -751,7 +856,7 @@ func _input(ev: InputEvent) -> void:
 func _touch_down(i: int, p: Vector2, vs: Vector2) -> void:
 	for n in buttons:
 		var r: Rect2 = buttons[n].rect
-		if touch and p.distance_to(r.get_center()) <= r.size.x / 2.0 + 4.0:
+		if touch and _shown(n) and p.distance_to(r.get_center()) <= r.size.x / 2.0 + 4.0:
 			_press(n, i)
 			return
 	if Rect2(pause_btn.position, pause_btn.size).grow(4).has_point(p):
@@ -810,11 +915,21 @@ func _press(n: String, i: int) -> void:
 			input.sprint = true
 			buttons.sprint.hold = true
 		"crouch":
-			g.toggle_crouch()
+			if g.pl.driving:
+				g.horn()
+			else:
+				g.toggle_crouch()
 		"light":
-			g.toggle_flash()
+			if g.pl.driving:
+				g.toggle_car_lights()
+			else:
+				g.toggle_flash()
 		"use":
 			g.do_interact()
+		"flare":
+			g.throw_flare()
+		"call":
+			g.call_phone()
 	controls.queue_redraw()
 
 func _key(ev: InputEventKey) -> void:
@@ -831,11 +946,23 @@ func _key(ev: InputEventKey) -> void:
 		return
 	match k:
 		KEY_C, KEY_CTRL:
-			g.toggle_crouch()
+			if g.pl.driving:
+				g.horn()
+			else:
+				g.toggle_crouch()
+		KEY_H:
+			g.horn()
 		KEY_F:
-			g.toggle_flash()
+			if g.pl.driving:
+				g.toggle_car_lights()
+			else:
+				g.toggle_flash()
 		KEY_E, KEY_ENTER:
 			g.do_interact()
+		KEY_G:
+			g.throw_flare()
+		KEY_Q:
+			g.call_phone()
 		KEY_1:
 			if g.phase == "dialog":
 				g.choose_line(0)
@@ -930,13 +1057,14 @@ func _wrap(l: Label, max_w := 612.0) -> Label:
 	return l
 
 var start_records: Label
+var day_btn: Button
 func _build_start() -> void:
 	var v := _screen("start", "start")
-	v.add_child(_label("03:12 · PASSING STORMS · CURFEW IN EFFECT", f_cond, 13, SODIUM, 0.24))
+	v.add_child(_label("CITY EVACUATED · ANIMAL AT LARGE · STAY INDOORS", f_cond, 13, SODIUM, 0.24))
 	v.add_child(_gap(6))
 	v.add_child(_big("LOST CITY", 94))
 	v.add_child(_gap(14))
-	v.add_child(_wrap(_label("A child is lost somewhere in these streets. Something far larger is out there with her. Find her, keep her close, and get her out of the city.", f_body, 18, TEXT)))
+	v.add_child(_wrap(_label("Something broke out of the Harlow lab and the city ran. A girl, Mia, was left behind. Her phone still connects now and then. Find her, keep her close, and get her out, on foot or in whatever car still runs.", f_body, 18, TEXT)))
 	v.add_child(_gap(12))
 	var meta := RichTextLabel.new()
 	meta.bbcode_enabled = true
@@ -949,15 +1077,19 @@ func _build_start() -> void:
 	meta.add_theme_color_override("default_color", MUTED)
 	meta.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if touch:
-		meta.text = "[color=#dde1e6][b]Left thumb[/b][/color] moves · [color=#dde1e6][b]Right thumb[/b][/color] looks · push the stick all the way to run · headphones on"
+		meta.text = "[color=#dde1e6][b]Left thumb[/b][/color] moves · [color=#dde1e6][b]Right thumb[/b][/color] looks · [color=#dde1e6][b]Freeze[/b][/color] and it can't see you · headphones on"
 	else:
-		meta.text = "[color=#dde1e6][b]WASD[/b][/color] walk · [color=#dde1e6][b]Shift[/b][/color] run · [color=#dde1e6][b]Space[/b][/color] sprint · [color=#dde1e6][b]Drag[/b][/color] look · [color=#dde1e6][b]C[/b][/color] crouch · [color=#dde1e6][b]F[/b][/color] light · [color=#dde1e6][b]E[/b][/color] interact"
+		meta.text = "[color=#dde1e6][b]WASD[/b][/color] walk · [color=#dde1e6][b]Shift[/b][/color] run · [color=#dde1e6][b]Space[/b][/color] sprint · [color=#dde1e6][b]Drag[/b][/color] look · [color=#dde1e6][b]C[/b][/color] crouch · [color=#dde1e6][b]F[/b][/color] light · [color=#dde1e6][b]E[/b][/color] use / drive · [color=#dde1e6][b]G[/b][/color] flare · [color=#dde1e6][b]Q[/b][/color] call her · [color=#dde1e6][b]H[/b][/color] horn"
 	v.add_child(meta)
 	start_records = _label("", f_cond_m, 14, MUTED, 0.08)
 	v.add_child(_gap(6))
 	v.add_child(start_records)
 	v.add_child(_gap(20))
-	v.add_child(_row([_button("START", true, g.start_game), _button("SETTINGS", false, open_settings)]))
+	day_btn = _button("NIGHT", false, func():
+		g.set_daylight(not g.daylight)
+		g.save_settings()
+		_sync_settings())
+	v.add_child(_row([_button("START", true, g.start_game), day_btn, _button("SETTINGS", false, open_settings)]))
 
 var end_eyebrow: Label
 var end_title: Label
@@ -1041,6 +1173,33 @@ func _build_settings() -> void:
 		seg.add_child(b)
 		set_ctrls.gfx[q] = b
 	gr.add_child(seg)
+	# night or day
+	var tr := _set_row(v, "TIME OF DAY")
+	var seg2 := HBoxContainer.new()
+	seg2.add_theme_constant_override("separation", 0)
+	set_ctrls.day = {}
+	for q in ["night", "day"]:
+		var b := Button.new()
+		b.text = q.to_upper()
+		b.toggle_mode = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.add_theme_font_override("font", _spaced(f_cond_b, 0.12, 13))
+		b.add_theme_font_size_override("font_size", 13)
+		for st in ["normal", "hover"]:
+			b.add_theme_stylebox_override(st, _pad(_sb(Color(0, 0, 0, 0), LINE, 1, 0), 12, 6))
+		for st in ["pressed", "hover_pressed"]:
+			b.add_theme_stylebox_override(st, _pad(_sb(SODIUM, SODIUM, 1, 0), 12, 6))
+		b.add_theme_color_override("font_color", MUTED)
+		b.add_theme_color_override("font_hover_color", MUTED)
+		b.add_theme_color_override("font_pressed_color", Color("140f08"))
+		b.add_theme_color_override("font_hover_pressed_color", Color("140f08"))
+		b.custom_minimum_size = Vector2(0, 32)
+		b.pressed.connect(func():
+			g.set_daylight(q == "day")
+			_sync_settings())
+		seg2.add_child(b)
+		set_ctrls.day[q] = b
+	tr.add_child(seg2)
 	# vibration
 	var vr := _set_row(v, "VIBRATION")
 	var cb := CheckBox.new()
@@ -1097,6 +1256,10 @@ func _sync_settings() -> void:
 		c.out.text = c.fmt.call(float(g.settings[k]))
 	for q in set_ctrls.gfx:
 		set_ctrls.gfx[q].set_pressed_no_signal(g.settings.gfx == q)
+	for q in set_ctrls.day:
+		set_ctrls.day[q].set_pressed_no_signal(g.daylight == (q == "day"))
+	if day_btn:
+		day_btn.text = "DAY" if g.daylight else "NIGHT"
 	set_ctrls.vib.set_pressed_no_signal(bool(g.settings.vib))
 
 func open_settings() -> void:
@@ -1117,6 +1280,7 @@ func show_screen(name: String) -> void:
 	if name == "start":
 		fade = 0.0
 		danger = 0.0
+		day_btn.text = "DAY" if g.daylight else "NIGHT"
 		var r: Dictionary = g.records
 		if int(r.runs) > 0:
 			start_records.text = "%d RESCUED IN %d %s" % [int(r.wins), int(r.runs), "ATTEMPT" if int(r.runs) == 1 else "ATTEMPTS"]

@@ -40,6 +40,8 @@ func _ready() -> void:
 	_loop("rain_body_loop", "RainBody")
 	_loop("wind_loop", "Wind")
 	_loop("drone_loop", "Drone")
+	_loop("engine_loop", "Engine")
+	_generate_horn()
 
 func _setup_buses() -> void:
 	var comp := AudioEffectCompressor.new()
@@ -48,7 +50,7 @@ func _setup_buses() -> void:
 	comp.attack_us = 3000.0
 	comp.release_ms = 250.0
 	AudioServer.add_bus_effect(0, comp)
-	for n in ["RainHiss", "RainBody", "Wind", "Drone"]:
+	for n in ["RainHiss", "RainBody", "Wind", "Drone", "Engine"]:
 		var b := _add_bus(n)
 		var lp := AudioEffectLowPassFilter.new()
 		lp.cutoff_hz = 20000.0
@@ -80,6 +82,30 @@ func _loop(name: String, bus: String) -> void:
 	add_child(p)
 	p.play()
 	loops[name] = {player = p, bus = AudioServer.get_bus_index(bus), target = 0.0, cur = 0.0, tau = 0.6, lp_target = 20000.0, lp_cur = 20000.0, lp_tau = 0.3}
+
+## Playback rate of a loop (the engine revs with speed).
+func loop_pitch(name: String, pitch: float) -> void:
+	(loops[name].player as AudioStreamPlayer).pitch_scale = clampf(pitch, 0.25, 4.0)
+
+## A car horn, two detuned square-ish tones, made here rather than shipped as a file.
+func _generate_horn() -> void:
+	var rate := 22050
+	var n := int(rate * 0.7)
+	var data := PackedByteArray()
+	data.resize(n * 2)
+	for i in n:
+		var t := float(i) / rate
+		var env := minf(1.0, t / 0.02) * minf(1.0, (0.7 - t) / 0.08)
+		var v := 0.0
+		for f in [392.0, 494.0]:
+			v += tanh(sin(TAU * f * t) * 3.0) * 0.5
+		data.encode_s16(i * 2, int(clampf(v * env * 0.6, -1.0, 1.0) * 32000.0))
+	var s := AudioStreamWAV.new()
+	s.format = AudioStreamWAV.FORMAT_16_BITS
+	s.mix_rate = rate
+	s.data = data
+	streams["horn"] = [s]
+	info["horn"] = {files = [], loop = false, gain = [1.0], durations = [0.7]}
 
 ## Ease a loop's volume (linear, before the manifest gain) and optional low-pass toward new targets.
 func loop_to(name: String, vol: float, tau: float, lp := -1.0, lp_tau := 0.3) -> void:

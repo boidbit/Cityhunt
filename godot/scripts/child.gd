@@ -53,6 +53,12 @@ func update(dt: float) -> void:
 	var sp := 0.0
 	var cower := false
 	var crouch := 0.0
+	if state == "car":
+		# riding with him
+		pos = P.pos
+		hidden = true
+		actor.position = pos
+		return
 	if state == "hiding":
 		crouch = 1.0
 		cower = true
@@ -99,7 +105,9 @@ func update(dt: float) -> void:
 					acc += U.hyp(tl[i + 1].x - tl[i].x, tl[i + 1].z - tl[i].z)
 				acc += U.hyp(tl[-1].x - px, tl[-1].z - pz)
 				path_d = acc
-			if state == "follow" and path_d > 17.0:
+			# (not while he is right next to her: after he doubles back the trail is long but he is
+			# here, and flipping to wait and back every frame would repeat her line and sob each frame)
+			if state == "follow" and path_d > 17.0 and dP > 7.0:
 				state = "wait"
 				wait_said = 0.0
 			if state == "wait":

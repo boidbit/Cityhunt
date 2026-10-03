@@ -63,8 +63,25 @@ var wx_to := 0.65
 var wx_s := "rain"
 var wx_t := 45.0
 
-var settings := {vol = 80, rain = 60, sens = 100, gfx = "auto", vib = true}
+var settings := {vol = 80, rain = 60, sens = 100, gfx = "auto", vib = true, day = false}
 var records := {runs = 0, wins = 0, best = 0.0}
+
+# cars, daylight, the T-Rex's footfalls
+var veh: Vehicles
+var dressing: Dressing
+var daylight := false
+var tremor := 0.0            # 0..1, the ground shaking under its steps (puddles ripple, see wet.gdshader)
+
+# finding her: the area her phone was last placed in, which shrinks with every clue and call
+var search := {c = Vector2(), r = 0.0}
+var call_t := 0.0            # until her phone can be rung again
+var calls := 0
+const CALL_WAIT := 30.0
+
+# flares: thrown to draw the T-Rex off
+var flares := 1
+var flare_list: Array = []   # burning: {node, light, x, z, t, voice, vy, vel, landed}
+var pickups: Array = []      # flares lying about: {x, z, node, taken}
 
 # clues and props
 var clues: Array = []
@@ -113,6 +130,8 @@ func _ready() -> void:
 		alarms.append({x = float(a.x), z = float(a.z), hx = float(a.hx), hz = float(a.hz), alarm_t = 0.0, cd = 0.0, call_t = 0.0, voice = -1})
 	world.alarm_state = func(i: int) -> float: return alarms[i].alarm_t if i >= 0 and i < alarms.size() else 0.0
 	loc_lamps = data.locLamps
+	veh = Vehicles.new(self)
+	dressing = Dressing.build(self)
 	sfx = Sfx.new()
 	sfx.name = "Sfx"
 	add_child(sfx)
@@ -141,6 +160,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_on_resize)
 	_on_resize()
 	apply_gfx()
+	set_daylight(bool(settings.day) or args.has("day"))
 	to_menu()
 	if args.has("play"):
 		start_game()
@@ -293,14 +313,16 @@ func new_game() -> void:
 				loc = l
 	var ok: Array = data.starts.filter(func(s): return U.hyp(s.x - loc.ent[0], s.z - loc.ent[1]) > 70.0)
 	var st: Dictionary = ok[randi() % ok.size()] if ok.size() else data.starts[0]
+	veh.reset()
 	pl.reset(Vector3(st.x, world.ground_at(st.x, st.z, 0.0), st.z))
+	pl.flash = not daylight
 	hud.set_toggle("crouch", false)
-	hud.set_toggle("light", true)
+	hud.set_toggle("light", pl.flash)
 	setup_location()
-	# the exit is the one farthest from the child
+	# the exit is one of the two farthest from the child
 	var ex: Array = data.exits.duplicate()
 	ex.sort_custom(func(a, b): return U.hyp(a.x - loc.ent[0], a.z - loc.ent[1]) > U.hyp(b.x - loc.ent[0], b.z - loc.ent[1]))
-	exit = ex[0]
+	exit = ex[randi() % 2]
 	exg.visible = false
 	ex_on = false
 	ex_flare.light_energy = 0.0
@@ -313,6 +335,15 @@ func new_game() -> void:
 		c.cd = 0.0
 		sfx.release(c.voice)
 		c.voice = -1
+	_reset_flares()
+	call_t = 8.0
+	calls = 0
+	tremor = 0.0
+	# her phone's last known area, somewhere around her (not centred on her)
+	var spot := Vector2(loc.spot[0], loc.spot[1])
+	search.r = 58.0
+	search.c = spot + Vector2.from_angle(randf() * TAU) * randf_range(0.2, 0.55) * search.r
+	search.c = search.c.clamp(Vector2(-bound, -bound), Vector2(bound, bound))
 	found = 0
 	time = 0.0
 	quiet = 0.0
@@ -327,10 +358,10 @@ func new_game() -> void:
 	dir.next_lightning = U.rnd(20.0, 30.0)
 	dir.next_siren = U.rnd(8.0, 20.0)
 	dir.esc_t = 25.0
-	hud.set_obj("FIND THE CHILD", "Child location: unknown")
+	hud.set_obj("FIND MIA", _search_line())
 	hud.reset_play()
 	phase = "explore"
-	hud.sub("YOU", "She has to be somewhere close. Stay quiet. Stay out of sight.", 5.0)
+	hud.sub("RADIO", "Her phone last connected inside the marked area. It hunts by movement. If it comes, freeze.", 6.0)
 
 func start_game() -> void:
 	paused = false
@@ -382,6 +413,10 @@ func show_end(won: bool) -> void:
 func to_menu() -> void:
 	paused = false
 	sfx.pause_all(false)
+	if pl.driving and pl.car != null:
+		veh.leave(pl.car)
+	pl.driving = false
+	pl.car = null
 	phase = "menu"
 	menu_t = 0.0
 	pl.light.light_energy = 0.0
@@ -412,6 +447,19 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_APPLICATION_PAUSED:
 		if can_pause():
 			set_pause(true)
+	# Android back (button or edge swipe, easy to hit with the thumb on the stick) steps back a
+	# screen instead of closing the app; only the start screen quits
+	elif what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		if hud.screens.settings.visible:
+			hud.close_settings()
+		elif paused:
+			set_pause(false)
+		elif can_pause():
+			set_pause(true)
+		elif phase == "lost" or phase == "wonEnd":
+			to_menu()
+		elif phase == "menu":
+			get_tree().quit()
 
 func save_settings() -> void:
 	U.save_json(SETTINGS_PATH, settings)
@@ -438,6 +486,18 @@ func apply_gfx() -> void:
 	vp.msaa_3d = Viewport.MSAA_DISABLED if lv == 0 else Viewport.MSAA_2X
 	world.set_quality(lv)
 	pl.light.shadow_enabled = lv > 0
+	world.set_daylight(daylight, lv)
+
+## Day or night (Settings, or the toggle on the start screen). By day it sees you from further off,
+## and you start with the torch off.
+func set_daylight(on: bool) -> void:
+	daylight = on
+	settings.day = on
+	world.set_daylight(on, gfx_level())
+	if phase != "menu":
+		pl.flash = pl.flash and not on
+		if not pl.driving:
+			hud.set_toggle("light", pl.flash)
 
 # ---------------------------------------------------------------- clues
 func _mat(c: Color, rough: float, metal := 0.0) -> StandardMaterial3D:
@@ -538,6 +598,8 @@ func place_clues() -> void:
 					return false
 			return true)
 		return c[randi() % c.size()] if c.size() else spots[randi() % spots.size()]
+	# a trail of things she dropped, from near where you start to her door: the note, then the
+	# backpack, then the rabbit, then her footprints. Each points on to the next (see next_clue).
 	var toy_s: Dictionary
 	if loc.id == "park":
 		var parks: Array = data.cluespots.filter(func(s): return s.park)
@@ -545,9 +607,15 @@ func place_clues() -> void:
 	else:
 		toy_s = pick.call(10.0, 34.0)
 	used.append(Vector2(toy_s.x, toy_s.z))
-	var bag_s: Dictionary = pick.call(48.0, 110.0)
+	var bag_s: Dictionary = pick.call(30.0, 60.0)
 	used.append(Vector2(bag_s.x, bag_s.z))
-	var note_s: Dictionary = pick.call(36.0, 1e9)
+	# the note: a short walk from where you start, on the way towards her
+	var to_her := Vector2(ex - pl.pos.x, ez - pl.pos.z).normalized()
+	var near_start := spots.filter(func(s):
+		var v := Vector2(s.x - pl.pos.x, s.z - pl.pos.z)
+		var dp := v.length()
+		return dp > 18.0 and dp < 60.0 and v.normalized().dot(to_her) > 0.35 and U.hyp(s.x - ex, s.z - ez) > 40.0 and U.hyp(s.x - bag_s.x, s.z - bag_s.z) > 28.0)
+	var note_s: Dictionary = near_start[randi() % near_start.size()] if near_start.size() else pick.call(36.0, 1e9)
 	_add_clue("toy", "Plush rabbit", T.toy, _make_toy(), toy_s.x, toy_s.z)
 	_add_clue("bag", "Backpack", String(T.bag).replace("{d}", U.dir_word(ex - bag_s.x, ez - bag_s.z)), _make_bag(), bag_s.x, bag_s.z)
 	_add_clue("note", "Handwritten note", T.note, _make_note(), note_s.x, note_s.z)
@@ -618,18 +686,45 @@ func find_clue(cl: Dictionary) -> void:
 	hud.toast(cl.title, cl.text, 9.0)
 	sfx.play("chime", 0.13)
 	hud.refresh_log()
+	shrink_search(0.62)
+
+## Narrows the area she is in (it always still holds her).
+func shrink_search(k: float) -> void:
+	var spot := Vector2(loc.spot[0], loc.spot[1])
+	search.r = maxf(12.0, search.r * k)
+	search.c = spot + (search.c - spot) * k * 0.8
+	if phase == "explore":
+		hud.set_obj("FIND MIA", _search_line())
+
+func _search_line() -> String:
+	var d: float = Vector2(pl.pos.x, pl.pos.z).distance_to(search.c) - search.r
+	if d <= 0.0:
+		return "She is somewhere in this area"
+	return "Search area · %d m %s" % [int(round(d)), U.dir_word(search.c.x - pl.pos.x, search.c.y - pl.pos.z).to_upper()]
+
+## The next thing on her trail you haven't found (the note, the bag, the rabbit, her footprints).
+func next_clue() -> Dictionary:
+	for t in ["note", "bag", "toy", "prints"]:
+		for cl in clues:
+			if cl.type == t and not cl.found:
+				return cl
+	return {}
 
 func _update_glints(t: float) -> void:
 	var bx := sin(pl.cam_yaw)
 	var bz := cos(pl.cam_yaw)
+	var nxt := next_clue()
 	for cl in clues:
 		if not cl.has("glint") or cl.found:
 			continue
 		var d := U.hyp(cl.x - pl.pos.x, cl.z - pl.pos.z)
 		var vis := 0.0
-		if d < 16.0 and absf(cl.y - pl.pos.y) < 2.0:
+		if nxt.size() and is_same(cl, nxt) and d < 45.0 and absf(cl.y - pl.pos.y) < 2.0:
+			# the next one on her trail glints from down the street
+			vis = 1.0
+		elif d < 16.0 and absf(cl.y - pl.pos.y) < 2.0:
 			var dot: float = ((cl.x - pl.pos.x) * bx + (cl.z - pl.pos.z) * bz) / maxf(d, 0.01)
-			vis = 1.0 if d < 4.0 else (1.0 if pl.flash and dot > 0.85 else 0.0)
+			vis = 1.0 if d < 4.0 else (1.0 if (pl.flash or daylight) and dot > 0.85 else 0.0)
 		var gl: MeshInstance3D = cl.glint
 		gl.visible = vis > 0.0
 		var c := Color(1.0, 0.949, 0.816).linear_to_srgb()
@@ -639,12 +734,15 @@ func _update_glints(t: float) -> void:
 # ---------------------------------------------------------------- interaction
 ## What USE does right now: {label, fn} or {}.
 func find_interact() -> Dictionary:
+	if pl.driving:
+		return {label = "EXIT", fn = exit_car} if pl.car.state == "driven" else {}
 	if pl.hidden:
 		return {label = "LEAVE", fn = _leave_hide}
 	var px := pl.pos.x
 	var pz := pl.pos.z
 	var same := func(y: float) -> bool: return absf(y - pl.pos.y) < 1.8
-	if phase == "explore" and U.hyp(child.pos.x - px, child.pos.z - pz) < 2.8 and same.call(child.pos.y):
+	# not while it is chasing him: the talk can't be cut short, so it would end with it standing over them
+	if phase == "explore" and mon.state != "CHASE" and U.hyp(child.pos.x - px, child.pos.z - pz) < 2.8 and same.call(child.pos.y):
 		return {label = "HELP", fn = talk_child}
 	if phase == "escape" and child.state == "wait" and U.hyp(child.pos.x - px, child.pos.z - pz) < 7.0:
 		return {label = "CALL", fn = _call_child}
@@ -661,6 +759,15 @@ func find_interact() -> Dictionary:
 			if d < cl.r and same.call(cl.y):
 				var c: Dictionary = cl
 				return {label = "EXAMINE", fn = func(): find_clue(c)}
+	for f in pickups:
+		if not f.taken and U.hyp(f.x - px, f.z - pz) < 2.0 and pl.pos.y > -1.0:
+			var fp: Dictionary = f
+			return {label = "TAKE", fn = func(): take_flare(fp)}
+	if pl.pos.y > -1.0 and (phase == "explore" or phase == "escape"):
+		var car = veh.near_car(px, pz)
+		if car != null:
+			var cc: Dictionary = car
+			return {label = "DRIVE", fn = func(): enter_car(cc)}
 	for h in hides:
 		if U.hyp(h.x - px, h.y - pz) < 2.1 and pl.pos.y > -1.0:
 			return {label = "HIDE", fn = _hide}
@@ -680,6 +787,257 @@ func _hide() -> void:
 	pl.crouch = true
 	hud.set_toggle("crouch", true)
 	hud.sub("HIDING", "Hold still.", 1.6)
+
+# ---------------------------------------------------------------- cars
+func enter_car(c: Dictionary) -> void:
+	veh.enter(c)
+	pl.driving = true
+	pl.car = c
+	pl.crouch = false
+	pl.hidden = false
+	pl.look_idle = 9.0
+	hud.set_toggle("crouch", false)
+	hud.set_toggle("light", pl.car_lights)
+	hud.release_input()
+	# she gets in with you if she's with you
+	if phase == "escape" and child.state in ["follow", "wait"] and U.hyp(child.pos.x - c.pos.x, child.pos.z - c.pos.y) < 12.0:
+		child.state = "car"
+		hud.sub("CHILD", "Okay… go, go!", 2.0)
+	elif not alarm_told and calls == 0 and not has_meta("drive_told"):
+		set_meta("drive_told", true)
+		hud.toast("DRIVING", "The engine carries, and headlights can be seen from far away. Lights off and stopped, a car is just another wreck.", 7.0)
+
+func exit_car() -> void:
+	var c: Dictionary = pl.car
+	if c == null:
+		return
+	var p := veh.exit_point(c)
+	veh.leave(c)
+	_put_out(p, c)
+
+## Out of the car at p: back on foot, and her with you if she was in it.
+func _put_out(p: Vector2, c: Dictionary) -> void:
+	pl.driving = false
+	pl.car = null
+	pl.pos = Vector3(p.x, world.ground_at(p.x, p.y, 0.0), p.y)
+	pl.actor.reset(pl.yaw)
+	pl.actor.position = pl.pos
+	pl.trail.clear()
+	pl.trail.append(pl.pos)
+	hud.set_toggle("light", pl.flash)
+	hud.release_input()
+	if child.state == "car":
+		var q := p
+		for k in 8:
+			var a := TAU * k / 8.0
+			var t := p + Vector2.from_angle(a) * 1.2
+			if col.walkable(t.x, t.y, 0.3):
+				q = t
+				break
+		child.pos = Vector3(q.x, world.ground_at(q.x, q.y, 0.0), q.y)
+		child.state = "follow"
+		child.ti = 0
+
+## The T-Rex bit the car you are in: the first bite shoves it, the next throws it over.
+func car_bitten(dir: Vector2) -> void:
+	var c: Dictionary = pl.car
+	if c == null or c.state != "driven":
+		return
+	c.hp -= 1
+	buzz(200)
+	pl.shake = 1.0
+	if c.hp <= 0:
+		veh.knock(c, dir, 1.0)
+		# it stands over the wreck a moment (a roar): long enough to crawl out and run
+		mon.bite_cd = 3.8
+		mon.roar_t = 1.4
+		hud.sub("YOU", "Hold on—!", 1.5)
+	else:
+		c.push += dir * 10.0
+		c.spin += randf_range(-1.6, 1.6)
+		c.speed *= 0.4
+		sfx.play("clang", 0.8)
+		sfx.play("shatter", 0.6)
+		hud.sub("YOU", "It's got the car—drive!", 2.0)
+
+## The car you were in came down on its roof or side: you crawl out, dazed.
+func thrown_out(c: Dictionary) -> void:
+	if pl.car != c:
+		return
+	veh.leave(c)
+	var p := veh.exit_point(c)
+	_put_out(p, c)
+	pl.stun_t = 1.4
+	pl.shake = 1.3
+	if child.state == "follow":
+		child.state = "scared"
+		child.scared_t = 3.0
+	hud.sub("YOU", "Get up. Get up and run.", 2.2)
+
+func horn() -> void:
+	if not pl.driving:
+		return
+	sfx.play("horn", 0.5)
+	# heard right across the city: a way to call it somewhere you aren't going to be
+	if U.hyp(mon.pos.x - pl.pos.x, mon.pos.z - pl.pos.z) < 160.0:
+		mon.hear(pl.pos.x, pl.pos.z)
+
+func toggle_car_lights() -> void:
+	pl.car_lights = not pl.car_lights
+	hud.set_toggle("light", pl.car_lights)
+	sfx.play("ui_click", 0.18, 0.2)
+
+# ---------------------------------------------------------------- her phone
+## Rings her phone: it rings where she is (so you can hear which way), the search area narrows,
+## and the T-Rex may hear it too.
+func call_phone() -> void:
+	if phase != "explore" and phase != "escape":
+		return
+	if call_t > 0.0:
+		hud.sub("PHONE", "No signal yet… (%d s)" % int(ceil(call_t)), 1.4)
+		return
+	call_t = CALL_WAIT
+	calls += 1
+	sfx.play("ui_click", 0.18, 0.2)
+	hud.sub("YOU", "Come on, Mia. Pick up…", 1.8)
+	after(1.6, _ring)
+
+func _ring() -> void:
+	if phase != "explore" and phase != "escape":
+		return
+	var src := child.pos
+	var pp := pos_params(src.x, src.y + 0.5, src.z, 26.0)
+	sfx.play("ring", maxf(0.06, pp.vol * 0.9), pp.pan, pp.lp)
+	var dw := U.dir_word(src.x - pl.pos.x, src.z - pl.pos.z)
+	if phase == "explore":
+		shrink_search(0.8)
+		hud.sub("PHONE", "(ringing, somewhere to the %s)" % dw, 3.2)
+		if not help_said and U.hyp(src.x - pl.pos.x, src.z - pl.pos.z) < 40.0:
+			after(2.4, _say_if_exploring.bind("A SMALL VOICE", "…Hello? I'm here, I'm hiding…", 3.0))
+	else:
+		hud.sub("PHONE", "(her phone rings, %s)" % dw, 2.4)
+	# it hears it as well
+	if U.hyp(mon.pos.x - src.x, mon.pos.z - src.z) < 85.0 and src.y > -2.0:
+		mon.hear(src.x + U.rnd(-6.0, 6.0), src.z + U.rnd(-6.0, 6.0))
+
+# ---------------------------------------------------------------- flares
+func _reset_flares() -> void:
+	for f in flare_list:
+		(f.node as Node).queue_free()
+		sfx.release(f.voice)
+	flare_list.clear()
+	for p in pickups:
+		(p.node as Node).queue_free()
+	pickups.clear()
+	flares = 1
+	# two more lying about, out on the streets
+	var spots: Array = data.cluespots.filter(func(s): return not s.under and col.walkable(s.x, s.z, 0.4) and U.hyp(s.x - pl.pos.x, s.z - pl.pos.z) > 25.0)
+	spots.shuffle()
+	var taken := []
+	for s in spots:
+		if pickups.size() >= 2:
+			break
+		var ok := true
+		for t in taken:
+			if U.hyp(t.x - s.x, t.y - s.z) < 60.0:
+				ok = false
+		if not ok:
+			continue
+		taken.append(Vector2(s.x, s.z))
+		var n := _flare_mesh(false)
+		n.position = Vector3(s.x, world.ground_at(s.x, s.z, 0.0) + 0.05, s.z)
+		n.rotation = Vector3(0, randf() * TAU, PI * 0.5)
+		clue_root.add_child(n)
+		var gl := _glint()
+		gl.position = n.position + Vector3(0, 0.35, 0)
+		(gl.material_override as StandardMaterial3D).albedo_color = Color(1.0, 0.35, 0.25, 0.8)
+		n.add_child(gl)
+		gl.top_level = true
+		pickups.append({x = s.x, z = s.z, node = n, taken = false})
+	hud.set_flares(flares)
+
+func _flare_mesh(lit: bool) -> Node3D:
+	var g := Node3D.new()
+	var body := _mesh(_cyl(0.025, 0.025, 0.3, 8), _mat(Color8(0xc8, 0x22, 0x18), 0.6), Vector3.ZERO)
+	g.add_child(body)
+	if lit:
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = Color(1.0, 0.55, 0.4)
+		g.add_child(_mesh(_sphere(0.04), m, Vector3(0, 0.16, 0)))
+	return g
+
+func take_flare(f: Dictionary) -> void:
+	f.taken = true
+	(f.node as Node3D).visible = false
+	flares += 1
+	hud.set_flares(flares)
+	sfx.play("clink", 0.3)
+	hud.sub("YOU", "A road flare. If it comes, throw it wide.", 2.4)
+
+## Throws a lit flare where the camera looks; it lands up to ~16 m away and burns for half a minute.
+func throw_flare() -> void:
+	if (phase != "explore" and phase != "escape") or pl.driving or pl.hidden or flares <= 0:
+		return
+	flares -= 1
+	hud.set_flares(flares)
+	var n := _flare_mesh(true)
+	var start := pl.pos + Vector3(0, 1.4, 0)
+	n.position = start
+	add_child(n)
+	var fl := OmniLight3D.new()
+	fl.light_color = EXIT_FLARE.linear_to_srgb()
+	fl.omni_range = 16.0
+	fl.omni_attenuation = World.RANGE_FIT.y
+	fl.light_energy = 0.0
+	n.add_child(fl)
+	var dir := Vector3(sin(pl.cam_yaw), 0, cos(pl.cam_yaw))
+	var vel := dir * 13.0 + Vector3(0, 5.0, 0)
+	flare_list.append({node = n, light = fl, x = start.x, z = start.z, t = 32.0, voice = -1, vel = vel, landed = false, halo = 1 + (flare_list.size() % 3)})
+	sfx.play("ignite", 0.4)
+	buzz(20)
+
+func _update_flares(dt: float, t: float) -> void:
+	var i := 0
+	while i < flare_list.size():
+		var f: Dictionary = flare_list[i]
+		var n: Node3D = f.node
+		if not f.landed:
+			var v: Vector3 = f.vel
+			v.y -= 14.0 * dt
+			f.vel = v
+			var np := n.position + v * dt
+			# stops against walls and cars
+			if not col.path_clear(n.position.x, n.position.z, np.x, np.z, 0.05):
+				v.x *= -0.25
+				v.z *= -0.25
+				f.vel = v
+				np = n.position + Vector3(0, v.y * dt, 0)
+			var gy := world.ground_at(np.x, np.z, n.position.y)
+			if np.y <= gy + 0.03:
+				np.y = gy + 0.03
+				f.landed = true
+				n.rotation = Vector3(0, randf() * TAU, PI * 0.5)
+				f.voice = sfx.hold("fire_loop")
+				mon.lure(np.x, np.z)
+			n.position = np
+			f.x = np.x
+			f.z = np.z
+		else:
+			f.t -= dt
+			var k := (0.75 + 0.25 * sin(t * 31.0 + i) * sin(t * 13.0)) * clampf(f.t / 3.0, 0.0, 1.0)
+			f.light.light_energy = 2.2 * k
+			world.set_dyn_halo(f.halo, n.position + Vector3(0, 0.2, 0), Color(1.6 * k, 0.32 * k, 0.16 * k), 3.2)
+			if f.voice >= 0:
+				var pp := pos_params(f.x, 0.2, f.z, 14.0)
+				sfx.hold_update(f.voice, "fire_loop", pp.vol * 0.25 * k, pp.pan, pp.lp)
+			if f.t <= 0.0:
+				sfx.release(f.voice)
+				world.set_dyn_halo(f.halo, Vector3(0, -99, 0), Color(0, 0, 0), 0.0)
+				n.queue_free()
+				flare_list.remove_at(i)
+				continue
+		i += 1
 
 func do_interact() -> void:
 	if phase != "explore" and phase != "escape":
@@ -708,6 +1066,10 @@ func talk_child() -> void:
 	hud.sub("YOU", "Hey… hey. Are you okay?", 2.2)
 	after(2.2, _say_if_dialog.bind("CHILD", "I was scared. It’s out there…", 2.4))
 	after(4.2, _offer_choices)
+
+func _say_if_exploring(who: String, line: String, dur: float) -> void:
+	if phase == "explore":
+		hud.sub(who, line, dur)
 
 func _say_if_dialog(who: String, line: String, dur: float) -> void:
 	if phase == "dialog":
@@ -748,6 +1110,8 @@ func begin_escape() -> void:
 	sfx.play("roar", maxf(0.25, pp.vol), pp.pan, pp.lp, 2)
 	hud.sub("CHILD", "It heard us…", 2.5)
 	mon.awareness = maxf(mon.awareness, 0.3)
+	# and soon after you see it: it crosses the street ahead, with a flash of lightning
+	dir.next_cross = time + 4.0
 
 func _escape_obj_if_escaping() -> void:
 	if phase == "escape":
@@ -788,7 +1152,7 @@ func _update_exit(t: float) -> void:
 		world.set_dyn_halo(0, Vector3(exit.x, 0.5, exit.z), Color(1.6 * k, 0.3 * k, 0.15 * k), 5.5)
 
 # ---------------------------------------------------------------- car alarms
-func _trigger_alarm(c: Dictionary) -> void:
+func trigger_alarm(c: Dictionary) -> void:
 	c.alarm_t = 14.0
 	c.cd = 60.0
 	c.call_t = 0.0
@@ -827,7 +1191,7 @@ func _car_alarms(dt: float) -> void:
 		var dx := maxf(absf(pl.pos.x - c.x) - c.hx, 0.0)
 		var dz := maxf(absf(pl.pos.z - c.z) - c.hz, 0.0)
 		if dx * dx + dz * dz < 0.16:
-			_trigger_alarm(c)
+			trigger_alarm(c)
 			break
 
 # ---------------------------------------------------------------- director
@@ -1033,15 +1397,22 @@ func _tick(dt: float, t: float) -> void:
 		_audio_mix(dt)
 	else:
 		mon.actor.visible = true
-		child.actor.visible = true
-		pl.actor.visible = true
+		child.actor.visible = child.state != "car"
+		pl.actor.visible = not pl.driving
 		var playing := phase in ["explore", "escape", "dialog", "caught"]
 		if playing:
 			time += dt
 			_run_timers()
 			pl.update(dt)
+			veh.update(dt)
 			if phase == "explore" or phase == "escape":
 				_car_alarms(dt)
+				_update_flares(dt, t)
+				call_t = maxf(0.0, call_t - dt)
+				if phase == "explore" and int(time * 2.0) != int((time - dt) * 2.0):
+					hud.set_obj("FIND MIA", _search_line())
+			tremor = maxf(0.0, tremor - dt * 1.8)
+			RenderingServer.global_shader_parameter_set("tremor", tremor)
 			mon.update(dt)
 			child.update(dt)
 			if phase != "caught":
@@ -1074,6 +1445,7 @@ func _tick(dt: float, t: float) -> void:
 			end_t += dt
 			time += dt
 			pl.update(dt)
+			veh.update(dt)
 			child.update(dt)
 			pl.update_camera(dt)
 			pl.update_flash(dt, t)
@@ -1093,6 +1465,7 @@ func _tick(dt: float, t: float) -> void:
 			hud.toast("WEATHER", data.wxMsg[s.n], 5.0)
 	wx_i += clampf(wx_to - wx_i, -dt / 14.0, dt / 14.0)
 	_update_exit(t)
+	dressing.update(dt, t)
 	world.update(dt, t, ref, wx_i, cam)
 	pl.lit = world.lit_near
 

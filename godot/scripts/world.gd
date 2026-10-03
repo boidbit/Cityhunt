@@ -55,6 +55,14 @@ var lit_near := false       # player standing under a working street lamp
 var flash := 0.0            # lightning 0..1
 var dyn_halo_mm: MultiMesh  # a few moving glows (exit flare, fires)
 var hemi_lights: Array[DirectionalLight3D] = []
+# the model cars, so they can be driven, thrown and wrecked (see Vehicles)
+var car_nodes: Array = []   # per vslot: {node, meshes: {role: [MeshInstance3D]}, hinge: Node3D or null}
+var car_halos: Array = []   # per vslot: [[halo index, point on the car]]
+var halo_off := {}          # halo index -> true: hidden (its car is being driven or is a wreck)
+var shadow_mm: MultiMesh    # the dark patch under each car
+var car_shadow := {}        # Vector2(x, z) of a car where it was parked -> its shadow instance
+var head_lit: StandardMaterial3D
+var tail_lit: StandardMaterial3D
 
 func _ready() -> void:
 	data = JSON.parse_string(FileAccess.get_file_as_string(BAKED + "city.json"))
@@ -398,34 +406,51 @@ const CAR_LIGHTS := {
 	agera = {head = Vector3(2.12, 0.68, 0.66), tail = Vector3(-1.9, 0.72, 0.7), roof = Vector3(-0.2, 1.13, 0.0), led = Vector3(0.6, 0.9, 0.3)},
 }
 
-## Glowing points that belong to the model cars: headlights, police bars, alarm lights.
+## Glowing points that belong to the model cars: headlights, police bars, alarm lights. Each car's
+## halos are remembered with their place on the car (car_halos), so they can follow it when it moves.
 func _car_halos(list: Array) -> void:
-	for s in data.vslots:
+	var slots: Array = data.vslots
+	car_halos.resize(slots.size())
+	for si in slots.size():
+		var s: Dictionary = slots[si]
+		var mine := []
+		car_halos[si] = mine
 		if not CAR_LIGHTS.has(s.vm):
 			continue
 		var L: Dictionary = CAR_LIGHTS[s.vm]
 		var t := car_xform(s)
+		var add := func(local: Vector3, rest: Array) -> void:
+			var p: Vector3 = t * local
+			mine.append([list.size(), local])
+			list.append([p.x, p.y, p.z] + rest)
 		if s.get("lit", false):
 			for sz in [-1.0, 1.0]:
-				var p: Vector3 = t * Vector3(L.head.x + 0.05, L.head.y, L.head.z * sz)
-				list.append([p.x, p.y, p.z, 1.0, 0.94, 0.82, 1.5])
+				add.call(Vector3(L.head.x + 0.05, L.head.y, L.head.z * sz), [1.0, 0.94, 0.82, 1.5])
 		if s.get("flash", false):
 			for k in 2:
-				var p: Vector3 = t * (L.roof + Vector3(0, 0.3, (k * 2 - 1) * 0.35))
 				blink.append({i = list.size(), kind = "police", ph = float(s.ph) + k * 0.5, alarm = -1})
-				list.append([p.x, p.y, p.z, 1.0, 0.1, 0.1, 2.2] if k == 0 else [p.x, p.y, p.z, 0.16, 0.3, 1.0, 2.2])
+				add.call(L.roof + Vector3(0, 0.3, (k * 2 - 1) * 0.35), [1.0, 0.1, 0.1, 2.2] if k == 0 else [0.16, 0.3, 1.0, 2.2])
 		var a := int(s.get("alarm", -1))
 		if a >= 0:
-			var led: Vector3 = t * L.led
 			blink.append({i = list.size(), kind = "led", ph = fmod(float(s.x) * 7.31 + float(s.z) * 3.17, 6.0), alarm = a})   # no randf: keep the game's random sequence as it was
-			list.append([led.x, led.y, led.z, 1.0, 0.12, 0.06, 0.3])
+			add.call(L.led, [1.0, 0.12, 0.06, 0.3])
 			for sz in [-1.0, 1.0]:
-				var f: Vector3 = t * Vector3(L.head.x + 0.05, L.head.y, L.head.z * sz)
 				blink.append({i = list.size(), kind = "alarm", ph = 0.0, alarm = a})
-				list.append([f.x, f.y, f.z, 1.0, 0.69, 0.25, 1.5])
-				var r: Vector3 = t * Vector3(L.tail.x - 0.05, L.tail.y, L.tail.z * sz)
+				add.call(Vector3(L.head.x + 0.05, L.head.y, L.head.z * sz), [1.0, 0.69, 0.25, 1.5])
 				blink.append({i = list.size(), kind = "alarm", ph = 0.0, alarm = a})
-				list.append([r.x, r.y, r.z, 1.0, 0.56, 0.12, 1.2])
+				add.call(Vector3(L.tail.x - 0.05, L.tail.y, L.tail.z * sz), [1.0, 0.56, 0.12, 1.2])
+
+## Moves a car's halos with it (t: the car's transform now); off: hide them (a wreck, or driving).
+func move_car_halos(si: int, t: Transform3D, off: bool) -> void:
+	for h in car_halos[si]:
+		var i: int = h[0]
+		halo_mm.set_instance_transform(i, Transform3D(Basis(), t * (h[1] as Vector3)))
+		if off:
+			halo_off[i] = true
+			halo_mm.set_instance_color(i, Color(0, 0, 0))
+		else:
+			halo_off.erase(i)
+			halo_mm.set_instance_color(i, halo_base[i])
 
 func _vehicles() -> void:
 	var slots: Array = data.vslots
@@ -450,11 +475,11 @@ func _vehicles() -> void:
 	(mats.tail as StandardMaterial3D).emission_enabled = true
 	(mats.tail as StandardMaterial3D).emission = Color(0x22 / 255.0, 0, 0)
 	# parked with the lights on
-	var head_lit := _std(Color(1, 0.95, 0.85), 0.2, 0.0)
+	head_lit = _std(Color(1, 0.95, 0.85), 0.2, 0.0)
 	head_lit.emission_enabled = true
 	head_lit.emission = Color(1.0, 0.93, 0.8)
 	head_lit.emission_energy_multiplier = 3.0
-	var tail_lit := _std(Color(0.4, 0.02, 0.02), 0.3, 0.0)
+	tail_lit = _std(Color(0.4, 0.02, 0.02), 0.3, 0.0)
 	tail_lit.emission_enabled = true
 	tail_lit.emission = Color(1.0, 0.05, 0.03)
 	tail_lit.emission_energy_multiplier = 2.0
@@ -482,10 +507,13 @@ func _vehicles() -> void:
 	add_child(root)
 	for s in slots:
 		if not parts.has(s.vm):
+			car_nodes.append(null)
 			continue
 		var car := Node3D.new()
 		car.transform = car_xform(s)
 		root.add_child(car)
+		var entry := {node = car, meshes = {}, hinge = null, roles = {}}
+		car_nodes.append(entry)
 		var type := String(s.get("type", "suv"))
 		var lit: bool = s.get("lit", false)
 		var list: Array = parts[s.vm]
@@ -509,6 +537,10 @@ func _vehicles() -> void:
 			elif lit and role == "tail":
 				m = tail_lit
 			mi.material_override = m
+			if not entry.meshes.has(role):
+				entry.meshes[role] = []
+			entry.meshes[role].append(mi)
+			entry.roles[mi] = mats.get(role, mats.trim)
 			if role == "paint" or role == "far":
 				mi.set_instance_shader_parameter("paint", Vector3(s.col[0], s.col[1], s.col[2]))
 				mi.set_instance_shader_parameter("livery", 1.0 if type == "police" else 0.0)
@@ -530,6 +562,7 @@ func _vehicles() -> void:
 				mi.position -= hinge
 				h.add_child(mi)
 				car.add_child(h)
+				entry.hinge = h
 			else:
 				car.add_child(mi)
 		var L: Dictionary = CAR_LIGHTS[s.vm]
@@ -624,6 +657,8 @@ func _contact_shadows() -> void:
 		var b := Basis(Vector3.UP, float(c.get("ry", 0.0))).scaled(Vector3(ext.x, 1, ext.y))
 		mm.set_instance_transform(i, Transform3D(b, Vector3(c.x, 0.012, c.z)))
 		mm.set_instance_custom_data(i, Color(1.1 / ext.x, 1.1 / ext.y, 0, 0))
+		car_shadow[Vector2(c.x, c.z)] = i
+	shadow_mm = mm
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
 	mmi.material_override = shader_mat("contact_shadow")
@@ -762,6 +797,34 @@ func _lights() -> void:
 		add_child(l)
 		pool_lights.append(l)
 
+# ---------------------------------------------------------------- day and night
+const DAY_FOG := Color(0.36, 0.39, 0.44)      # linear: a grey, rain-washed haze
+const DAY_AMBIENT := Color(0.42, 0.44, 0.48)   # streets between tall buildings are mostly in shade
+const MOON := Color(0x6d / 255.0, 0x82 / 255.0, 0xa8 / 255.0)
+var day := 0.0
+
+## Daylight on or off: the sun instead of the moon, a brighter sky and haze, and the city's lights
+## (windows, lamps, neon, light pools) faded down in the shaders through the `daylight` global.
+func set_daylight(on: bool, lv := 2) -> void:
+	day = 1.0 if on else 0.0
+	RenderingServer.global_shader_parameter_set("daylight", day)
+	fog_base = DAY_FOG if on else FOG_BASE
+	fog_end = 430.0 if on else FOG_END
+	for e in [env, refl_env]:
+		if e == null:
+			continue
+		e.background_color = fog_base.linear_to_srgb()
+		e.ambient_light_color = (DAY_AMBIENT if on else AMBIENT).linear_to_srgb()
+		e.tonemap_exposure = 1.0 if on else 1.3
+		e.glow_hdr_threshold = 1.5 if on else 0.8
+	moon.light_color = (Color(1.0, 0.95, 0.87) if on else MOON).linear_to_srgb()
+	moon.shadow_enabled = on and lv > 0
+	moon.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	moon.directional_shadow_max_distance = 70.0
+	moon.light_angular_distance = 0.6
+	sky_mat.set_shader_parameter("hor", fog_base)
+	skyline_mat.set_shader_parameter("hor", fog_base)
+
 ## Called every frame with the point the lights should gather around (the player).
 func update(dt: float, t: float, ref: Vector3, weather: float, cam: Camera3D) -> void:
 	RenderingServer.global_shader_parameter_set("game_time", t)
@@ -793,11 +856,13 @@ func update(dt: float, t: float, ref: Vector3, weather: float, cam: Camera3D) ->
 			l.light_color = (POLICE_RED if int(floor(t * 2.2)) % 2 == 1 else POLICE_BLUE).linear_to_srgb()
 		else:
 			l.light_color = L.c
-		l.light_energy = L.i * clampf(1.0 - (d - 22.0) / 18.0, 0.0, 1.0) * f * RANGE_FIT.z
+		l.light_energy = L.i * clampf(1.0 - (d - 22.0) / 18.0, 0.0, 1.0) * f * RANGE_FIT.z * (1.0 - day)
 		if L.kind == "street" and Vector2(L.p.x - ref.x, L.p.z - ref.z).length() < 6.5 and f > 0.5:
 			lit_near = true
 	# blinking halos
 	for b in blink:
+		if halo_off.has(int(b.i)):
+			continue
 		var k := 1.0
 		match String(b.kind):
 			"avi": k = 1.0 if sin((t + b.ph) * 2.2) > 0.6 else 0.08
@@ -833,7 +898,9 @@ func update(dt: float, t: float, ref: Vector3, weather: float, cam: Camera3D) ->
 	env.fog_depth_end = fog_end / (0.85 + 0.3 * weather)
 	env.ambient_light_energy = 1.0 + flash * 5.2
 	for h in hemi_lights:
-		h.light_energy = maxf(HEMI_SKY.r - HEMI_GROUND.r, maxf(HEMI_SKY.g - HEMI_GROUND.g, HEMI_SKY.b - HEMI_GROUND.b)) * HEMI / 2.0 * (1.0 + flash * 5.2)
+		h.light_energy = maxf(HEMI_SKY.r - HEMI_GROUND.r, maxf(HEMI_SKY.g - HEMI_GROUND.g, HEMI_SKY.b - HEMI_GROUND.b)) * HEMI / 2.0 * (1.0 + flash * 5.2) * (1.0 + 3.0 * day)
+	# the sun dims behind rain clouds
+	moon.light_energy = lerpf(0.16, 2.6 - 1.6 * weather, day)
 	bolt.light_energy = flash * 1.6
 	env.fog_light_color = fog_base.lightened(flash * 0.18).linear_to_srgb()
 	sky_mat.set_shader_parameter("flash", flash)

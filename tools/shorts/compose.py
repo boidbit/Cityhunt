@@ -2,9 +2,9 @@
 """Turns a clip recorded by godot/tests/short.gd into a finished Short: sound design laid on the moments the
 director logged (EVENT lines: bites, the flip and the landing, the ram, each car thrown, the jaws snapping, roars,
 slow motion, the heartbeat), a light wind bed under it all, a short hook caption, loudness evened out for YouTube,
-and a contact sheet (one frame a second) to check the cuts at a glance.
+a contact sheet (one frame a second) to check the cuts at a glance, and a .txt with a title, description and tags.
 
-    python3 tools/shorts/compose.py --clip out/clip.avi --log godot.log --recipe flip --out out/flip_seed1.mp4
+    python3 tools/shorts/compose.py --clip out/clip.avi --log godot.log --recipe flip --seed 1 --out out/flip_seed1.mp4
 
 The effects are the game's own sounds (godot/assets/sounds, getaway/assets/sounds) and a synthesised sub-bass hit.
 No music: the sound is the point.
@@ -21,6 +21,50 @@ WHOOSH = os.path.join(ROOT, "getaway", "assets", "sounds", "whoosh.wav")
 FONT = os.path.join(ROOT, "getaway", "assets", "fonts", "BigShouldersDisplay.ttf")
 
 HOOK = {"flip": "WAIT FOR IT", "ram": "CAR VS T-REX", "nearmiss": "TOO CLOSE", "freeze": "DO NOT MOVE", "domino": ""}
+
+# What to paste into YouTube for each Short: a title picked by the seed (so two videos of one recipe differ),
+# a description and tags. Titles stay under 100 characters; no film or car brand names.
+TITLES = {
+    "flip": ["T-Rex Flips the Car in Slow Motion 😳", "Wait for the Flip… 🦖💥", "He Almost Got Away From the T-Rex 🦖",
+             "This T-Rex Does Not Let Go 😱", "T-Rex vs Car: The Flip 🦖🚗"],
+    "ram": ["Car vs T-Rex: Who Wins? 🦖🚗", "He Rammed a T-Rex at Full Speed 💥", "Head-On With a T-Rex 😳",
+            "Never Stand in Front of This Car 🦖", "Full Speed Into a Dinosaur 💥🦖"],
+    "domino": ["T-Rex Throws Every Car in the Street 🦖💥", "How Many Cars Can a T-Rex Throw? 🚗🚗🚗",
+               "Satisfying T-Rex Car Smash 🦖", "T-Rex Domino Run 💥", "Nothing Stops This T-Rex 🦖🚗"],
+    "nearmiss": ["Inches From the T-Rex's Jaws 😱", "Closest T-Rex Escape Ever 🦖", "It Missed by THIS Much 😳",
+                 "Don't Look Back… 🦖🚗", "Outrunning a T-Rex 🦖💨"],
+    "freeze": ["Don't Move… It Can't See You 🦖", "Hiding From a T-Rex 😰", "The T-Rex Is Right There… 🦖",
+               "Hold Your Breath 😶🦖", "It Hunts by Movement… 🦖"],
+}
+STORY = {
+    "flip": "A T-Rex chases a car through an empty city, bites it twice and throws it over. Watch it in slow motion.",
+    "ram": "Out of road and out of options: he floors it straight at the T-Rex.",
+    "domino": "A T-Rex charges down a street full of parked cars and throws every one of them aside.",
+    "nearmiss": "Its jaws snap shut again and again, inches from the car. Can he get away?",
+    "freeze": "It sees what moves. He hides beside a car and holds still while the T-Rex sniffs around him.",
+}
+QUESTION = {
+    "flip": "Would you have made it out? 👇", "ram": "Who won this one? 👇", "domino": "How many did you count? 👇",
+    "nearmiss": "Closest call you've seen? 👇", "freeze": "Could you stay still? 👇",
+}
+TAGS = ["t rex", "trex", "dinosaur", "dinosaur chase", "t rex chase", "t rex vs car", "car chase", "dinosaur attack",
+        "satisfying", "slow motion", "3d animation", "game", "gameplay", "shorts", "dino", "city", "survival"]
+RECIPE_TAGS = {
+    "flip": ["car flip", "car crash", "slow motion crash"], "ram": ["car vs dinosaur", "head on crash", "car crash"],
+    "domino": ["car smash", "destruction", "satisfying destruction"], "nearmiss": ["near miss", "close call", "escape"],
+    "freeze": ["hiding", "suspense", "asmr", "stealth"],
+}
+HASHTAGS = {"flip": "#trex #dinosaur #slowmotion", "ram": "#trex #dinosaur #carcrash", "domino": "#trex #satisfying #dinosaur",
+            "nearmiss": "#trex #dinosaur #closecall", "freeze": "#trex #dinosaur #suspense"}
+
+
+def metadata(recipe, seed):
+    """Title, description and tags for one video, as text ready to copy into YouTube Studio."""
+    titles = TITLES.get(recipe, ["T-Rex in the City 🦖"])
+    title = titles[seed % len(titles)] + " #shorts"
+    desc = "%s\n\n%s\n\n#shorts %s" % (STORY.get(recipe, ""), QUESTION.get(recipe, ""), HASHTAGS.get(recipe, "#trex"))
+    tags = ", ".join(RECIPE_TAGS.get(recipe, []) + TAGS)
+    return "TITLE\n%s\n\nDESCRIPTION\n%s\n\nTAGS\n%s\n" % (title, desc, tags)
 
 
 def snd(name):
@@ -71,7 +115,12 @@ def main():
     ap.add_argument("--log", required=True)
     ap.add_argument("--recipe", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
+
+    meta = a.out[:-4] + ".txt"
+    with open(meta, "w", encoding="utf-8") as fh:
+        fh.write(metadata(a.recipe, a.seed))
 
     events = []
     with open(a.log, errors="replace") as fh:
@@ -163,7 +212,7 @@ def main():
     sheet = a.out[:-4] + "_sheet.png"
     run(["ffmpeg", "-y", "-v", "error", "-i", a.out, "-vf", "fps=1,scale=216:384,tile=10x4", "-frames:v", "1",
          "-update", "1", sheet])
-    print("made %s (%s s) and %s" % (a.out, probe(a.out, "format=duration"), sheet))
+    print("made %s (%s s), %s and %s" % (a.out, probe(a.out, "format=duration"), sheet, meta))
 
 
 if __name__ == "__main__":

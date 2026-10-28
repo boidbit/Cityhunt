@@ -141,11 +141,13 @@ jobs:
       - name: Sound design and captions
         run: |
           set -o pipefail
-          if ! python3 tools/shorts/compose.py --clip out/clip.avi --log godot.log --recipe $RECIPE --out out/${RECIPE}_seed${SEED}.mp4 2>&1 | tee compose.log; then
+          if ! python3 tools/shorts/compose.py --clip out/clip.avi --log godot.log --recipe $RECIPE --seed $SEED --out out/${RECIPE}_seed${SEED}.mp4 2>&1 | tee compose.log; then
             echo "::error title=compose $RECIPE seed $SEED::$(tail -15 compose.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')"
             exit 1
           fi
           echo "::notice title=final $RECIPE seed $SEED::$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/${RECIPE}_seed${SEED}.mp4) seconds"
+          # the title, description and tags, on the run page to copy from
+          { echo "### ${RECIPE}_seed${SEED}.mp4"; echo '```'; cat out/${RECIPE}_seed${SEED}.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -154,6 +156,7 @@ jobs:
           path: |
             out/*.mp4
             out/*_sheet.png
+            out/*.txt
           retention-days: 14
           if-no-files-found: ignore
 
@@ -182,4 +185,4 @@ jobs:
           gh release delete shorts-latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
           gh release create shorts-latest out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
             --title "Shorts renders (latest)" \
-            --notes "Rendered by the Render Shorts video workflow from ${GITHUB_SHA::7}: one video per recipe and seed, each with a contact sheet (one frame a second)."
+            --notes "Rendered by the Render Shorts video workflow from ${GITHUB_SHA::7}: one video per recipe and seed, each with a contact sheet (one frame a second) and a .txt with its title, description and tags."

@@ -146,7 +146,7 @@ func after_game(dt: float) -> void:
 	if g == null or started < 0:
 		return
 	place_rex()
-	if recipe == "domino":
+	if recipe == "domino" or (recipe == "flip" and events.has("flip")):
 		g.pl.actor.visible = false
 	camera(now(), dt)
 
@@ -202,6 +202,7 @@ func setup() -> void:
 	g.pl.flash = false
 	g.cam.keep_aspect = Camera3D.KEEP_HEIGHT
 	bright()
+	solid_cars()
 	var p := Vector2(g.pl.pos.x, g.pl.pos.z)
 	match recipe:
 		"ram":
@@ -229,6 +230,28 @@ func bright() -> void:
 		e.tonemap_exposure = 1.2
 	w.sky_mat.set_shader_parameter("hor", w.fog_base)
 	w.skyline_mat.set_shader_parameter("hor", w.fog_base)
+
+## The car models are shells with no floor, their panels drawn from outside only: turned over, you would see
+## straight through them to the sky. Drawn from both sides (the paint shader makes the inside dark), a car on
+## its roof looks solid.
+func solid_cars() -> void:
+	var done := {}
+	for c in g.veh.cars:
+		for role in c.meshes:
+			for mi in c.meshes[role]:
+				var gi := mi as GeometryInstance3D
+				if gi == null or gi.material_override == null:
+					continue
+				var m: Material = gi.material_override
+				if not done.has(m):
+					done[m] = g.world._two_sided(m)
+				var paint = gi.get_instance_shader_parameter("paint")
+				var livery = gi.get_instance_shader_parameter("livery")
+				gi.material_override = done[m]
+				if paint != null:
+					gi.set_instance_shader_parameter("paint", paint)
+				if livery != null:
+					gi.set_instance_shader_parameter("livery", livery)
 
 # ---------------------------------------------------------------- paths
 func poly_len(pts: Array) -> float:
@@ -433,23 +456,68 @@ func setup_chase(p: Vector2) -> void:
 	g.mon.start_chase()
 	follow = true
 
-## Close behind for six seconds, then it closes in: a bite that shoves the car, a second that throws it
-## over (slow motion in the air), it lands, the creature roars.
+## Close behind for ten seconds (its jaws snap once, short of the boot), then it closes in: a bite that shoves
+## the car, a second that throws it over (slow motion in the air). It lands on its roof; the creature walks up
+## to the wreck, sniffs at it and roars. He stays inside: nobody climbs out of that.
 func step_flip(t: float, dt: float) -> void:
-	drive(t, dt)
-	keep_chasing()
-	gap = 13.0 if t < 6.0 else lerpf(13.0, 8.0, clampf((t - 6.0) / 1.5, 0.0, 1.0))
+	var m := g.mon
+	if not events.has("flip"):
+		drive(t, dt)
+		keep_chasing()
+		var dip := 1.0 - clampf(absf(t - 5.5) / 1.1, 0.0, 1.0)
+		gap = 13.0 - 3.5 * smoothstep(0.0, 1.0, dip) if t < 10.0 else lerpf(13.0, 8.0, clampf((t - 10.0) / 1.5, 0.0, 1.0))
+		if t >= 5.3 and not events.has("snap_1"):
+			mark("snap_1", t)
+			m.actor.play_once("attack", 1.4)
+		if t < 10.0:
+			m.bite_cd = 99.0
+		elif not events.has("hunt"):
+			mark("hunt", t)
+			m.bite_cd = 0.0
 	if car.state == "tumble" and not events.has("flip"):
 		mark("flip", t)
-		slow(t, 2.4, 0.3)
+		slow(t, 3.0, 0.3)
 		lock_orbit()
+	if events.has("flip"):
+		# he is in there, and stays there
+		g.pl.hidden = true
+		g.pl.compromised = false
+		m.awareness = 0.0
+		m.bite_cd = 99.0
 	if events.has("flip") and car.state != "tumble" and not events.has("land"):
 		mark("land", t)
-		end_after(t, 2.6)
-	if events.has("land") and not events.has("roar") and t > events.land + 0.4:
-		g.mon.roar_t = 1.4
-		mark("roar", t)
-	if t > 22.0 and not events.has("flip"):
+		# it walks up to the wreck
+		var mp := Vector2(m.pos.x, m.pos.z)
+		var cp: Vector2 = car.pos
+		var to := (cp - mp).normalized() if cp.distance_to(mp) > 0.1 else Vector2(0, 1)
+		rpath = [mp, cp - to * 7.0]
+		rs = 0.0
+		rdir = 1.0
+		walk = true
+	if events.has("land") and not events.has("roar"):
+		var at_wreck := rs >= poly_len(rpath) - 0.3
+		rspeed = 0.0 if at_wreck else 3.0
+		if not at_wreck:
+			m.state = "PATROL"
+			m.pause_t = 0.0
+		else:
+			mark("sniff", t)
+			face_to = car.pos
+			m.state = "INVESTIGATE"
+			m.phase2 = 1
+			m.pause_t = 9.0
+			m.lure_t = 9.0
+			if t > events.sniff + 2.4:
+				m.state = "PATROL"
+				m.lure_t = 0.0
+				m.roar_t = 1.6
+				mark("roar", t)
+				end_after(t, 2.8)
+		if t > events.land + 7.0:
+			m.roar_t = 1.6
+			mark("roar", t)
+			end_after(t, 2.8)
+	if t > 26.0 and not events.has("flip"):
 		end_after(t, 0.5)   # it never got the second bite in: cut it short rather than drag on
 
 ## Its jaws snap shut just short of the boot three times; the last in slow motion. Then he floors it, it
@@ -777,8 +845,10 @@ func cut(t: float) -> String:
 		_:
 			if events.has("flip") and slow_until >= 0.0 and not lock.is_empty():
 				return "locked"
-			if events.has("land"):
+			if events.has("roar"):
 				return "rex_face"
+			if events.has("land"):
+				return "wreck"
 			if car != null and (car.state == "tumble" or not g.pl.driving):
 				return "game"
 			if bites > 0:
@@ -870,6 +940,13 @@ func camera(t: float, _dt: float) -> void:
 				var c: Vector3 = lock.c
 				pos = pulled(c + Vector3(0, 1.5, 0), c + Vector3(cos(a), 0.0, sin(a)) * 9.0 + Vector3(0, 2.2, 0))
 				look = cpos + Vector3(0, 1.2, 0)
+			fov = 62.0
+		"wreck":
+			# side on to the creature and the wreck it is walking up to
+			var dd := Vector3(m.pos.x - cpos.x, 0.0, m.pos.z - cpos.z).normalized()
+			var mid4 := cpos.lerp(Vector3(m.pos.x, cpos.y, m.pos.z), 0.45)
+			pos = pulled(mid4 + Vector3(0, 1.2, 0), mid4 + Vector3(-dd.z, 0.0, dd.x) * 10.0 + Vector3(0, 1.3, 0)) + jit
+			look = mid4 + Vector3(0, 1.4, 0)
 			fov = 62.0
 		"dom_front":
 			var ahead := poly_at(rpath, rs + 20.0)

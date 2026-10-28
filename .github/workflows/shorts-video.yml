@@ -132,9 +132,10 @@ jobs:
           # what happened, as annotations on the run page: the clip, the second-by-second trace, and any errors
           info=$(ffprobe -v error -show_entries format=duration,size:stream=width,height -of compact=p=0 out/clip.avi | tr '\n' ' ')
           echo "::notice title=clip $RECIPE seed $SEED::${info}"
-          trace=$(grep -E '^(t=|shot |EVENT )' godot.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
+          # (grep finding nothing is fine here: "|| true", or the step would fail on a clean log)
+          trace=$(grep -E '^(t=|shot |EVENT )' godot.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n' || true)
           echo "::notice title=trace $RECIPE seed $SEED::${trace}"
-          errs=$(grep -E 'SCRIPT ERROR|ERROR|WARNING' godot.log | grep -v -E 'ObjectDB instances leaked|resources still in use' | head -12 | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
+          errs=$(grep -E 'SCRIPT ERROR|ERROR|WARNING' godot.log | grep -v -E 'ObjectDB instances leaked|resources still in use' | head -12 | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n' || true)
           if [ -n "$errs" ]; then echo "::warning title=godot errors $RECIPE seed $SEED::${errs}"; fi
 
       - name: Sound design and captions

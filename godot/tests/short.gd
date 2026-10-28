@@ -30,6 +30,7 @@ var flared := false
 var broke := false
 var car: Variant = null
 var bite_t := -99.0      # when the first bite landed
+var unpaused := 0        # how many times the game paused itself and was set going again
 var trace: Array = []
 var trace_at := 0.0
 var rig: Node
@@ -76,6 +77,12 @@ func _process(dt: float) -> bool:
 			started = f
 		return false
 	var t := (f - started) / FPS
+	# the game pauses itself when its window loses focus (as on a phone); on the virtual screen that happens
+	# a few seconds in and would freeze the rest of the video
+	if g.paused:
+		g.paused = false
+		g.sfx.pause_all(false)
+		unpaused += 1
 	match shot:
 		"freeze":
 			freeze(t, dt)
@@ -101,7 +108,7 @@ func _process(dt: float) -> bool:
 func log_trace(t: float) -> void:
 	var d := Vector2(g.mon.pos.x - g.pl.pos.x, g.mon.pos.z - g.pl.pos.z).length()
 	var sp: float = absf(car.speed) if car != null and g.pl.driving else g.pl.real_sp
-	var line := "t=%4.1f phase=%s rex=%s dist=%.0fm speed=%.1f cam=%s%s" % [t, g.phase, g.mon.state, d, sp, cut(t),
+	var line := "t=%4.1f phase=%s rex=%s dist=%.0fm speed=%.1f cam=%s unpaused=%d%s" % [t, g.phase, g.mon.state, d, sp, cut(t), unpaused,
 		(" car=%s hp=%d" % [car.state, car.hp]) if car != null else ""]
 	trace.append(line)
 	print(line)

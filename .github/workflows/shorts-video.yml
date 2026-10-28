@@ -74,13 +74,20 @@ jobs:
       - name: Record the shot
         run: |
           mkdir -p out
+          set -o pipefail
           start=$(date +%s)
-          # the trace lines it prints (and the ::notice with all of them) show what happened second by second
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
             --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
-            -s res://tests/short.gd -- --shot=$SHOT --seed=${{ matrix.seed }} --len=26 --bite=12
+            -s res://tests/short.gd -- --shot=$SHOT --seed=${{ matrix.seed }} --len=26 --bite=12 2>&1 | tee godot.log
           echo "recording took $(( $(date +%s) - start )) s"
           test -s out/clip.avi
+          # what happened, as annotations on the run page: the clip's length, the second-by-second trace, and any errors
+          info=$(ffprobe -v error -show_entries format=duration,size -of compact=p=0 out/clip.avi | tr '\n' ' ')
+          echo "::notice title=clip seed ${{ matrix.seed }}::${info}"
+          trace=$(grep -E '^(t=|shot )' godot.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
+          echo "::notice title=trace seed ${{ matrix.seed }}::${trace}"
+          errs=$(grep -E 'ERROR|WARNING' godot.log | head -12 | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
+          if [ -n "$errs" ]; then echo "::warning title=godot errors seed ${{ matrix.seed }}::${errs}"; fi
 
       - name: Add captions
         run: |
@@ -89,6 +96,7 @@ jobs:
             "HOLD ON|15.0|17.0" "DID HE MAKE IT?|26.4|27.9"
           mv out/short.mp4 out/${SHOT}_seed${{ matrix.seed }}.mp4
           mv out/short_sheet.png out/${SHOT}_seed${{ matrix.seed }}_sheet.png
+          echo "::notice title=final video seed ${{ matrix.seed }}::$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/${SHOT}_seed${{ matrix.seed }}.mp4) seconds"
 
       - uses: actions/upload-artifact@v4
         if: always()

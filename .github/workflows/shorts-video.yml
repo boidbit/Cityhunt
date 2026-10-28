@@ -4,10 +4,8 @@ name: Render Shorts video
 # day: Godot's movie maker plays a scripted recipe (godot/tests/short.gd) on a software renderer, then
 # tools/shorts/compose.py lays the sound design and a hook caption on it. Every recipe x seed renders side by side.
 # The videos and a contact sheet of each are in the run's Artifacts and on the public "shorts-latest" release.
+# Only run by hand (Actions tab, Run workflow), never on a push.
 on:
-  push:
-    branches: [shorts-video]
-    paths: ["godot/tests/short.gd", "tools/shorts/**", ".github/workflows/shorts-video.yml"]
   workflow_dispatch:
     inputs:
       recipe:
@@ -34,9 +32,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # by hand: the recipe chosen (or all of them); on a push to the branch: all of them
-        recipe: ${{ fromJSON((github.event_name != 'workflow_dispatch' || inputs.recipe == 'all') && '["flip","ram","domino","nearmiss","freeze"]' || format('["{0}"]', inputs.recipe)) }}
-        seed: ${{ fromJSON(format('[{0}]', inputs.seeds || '1,2')) }}
+        recipe: ${{ fromJSON(inputs.recipe == 'all' && '["flip","ram","domino","nearmiss","freeze"]' || format('["{0}"]', inputs.recipe)) }}
+        seed: ${{ fromJSON(format('[{0}]', inputs.seeds)) }}
     env:
       RECIPE: ${{ matrix.recipe }}
       SEED: ${{ matrix.seed }}

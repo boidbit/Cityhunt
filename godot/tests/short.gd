@@ -783,6 +783,7 @@ func cut(t: float) -> String:
 			if bites > 0:
 				return "side_low"
 			return ["dash_back", "front_low", "side_low", "rex_pov"][int(t / 1.7) % 4]
+	return "game"
 
 ## A camera position pulled in short of a wall between from and want.
 func pulled(from: Vector3, want: Vector3) -> Vector3:
@@ -817,7 +818,7 @@ func camera(t: float, _dt: float) -> void:
 	var pos := Vector3()
 	var look := Vector3()
 	var fov := 66.0
-	var on_car := car != null and g.pl.driving and car.state == "driven"
+	var on_car: bool = car != null and g.pl.driving and car.state == "driven"
 	var cpos := Vector3()
 	var cf := Vector3(0, 0, 1)
 	var cr := Vector3(1, 0, 0)

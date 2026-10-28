@@ -10,12 +10,16 @@ on:
     paths: ["godot/tests/short.gd", "tools/shorts/**", ".github/workflows/shorts-video.yml"]
   workflow_dispatch:
     inputs:
-      recipes:
-        description: "Recipes to render, as a JSON list (flip, ram, domino, nearmiss, freeze)"
-        default: '["flip","ram","domino","nearmiss","freeze"]'
+      recipe:
+        description: "Which Short to make (all = every recipe)"
+        type: choice
+        default: all
+        options: [all, flip, ram, domino, nearmiss, freeze]
       seeds:
-        description: "Seeds to render, as a JSON list (each puts it somewhere else in the city)"
-        default: "[1,2]"
+        description: "Which seeds (each puts it somewhere else in the city)"
+        type: choice
+        default: "1"
+        options: ["1", "1,2", "1,2,3", "2", "3", "4", "5"]
 
 permissions:
   contents: read
@@ -30,8 +34,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        recipe: ${{ fromJSON(github.event.inputs.recipes || '["flip","ram","domino","nearmiss","freeze"]') }}
-        seed: ${{ fromJSON(github.event.inputs.seeds || '[1,2]') }}
+        # by hand: the recipe chosen (or all of them); on a push to the branch: all of them
+        recipe: ${{ fromJSON((github.event_name != 'workflow_dispatch' || inputs.recipe == 'all') && '["flip","ram","domino","nearmiss","freeze"]' || format('["{0}"]', inputs.recipe)) }}
+        seed: ${{ fromJSON(format('[{0}]', inputs.seeds || '1,2')) }}
     env:
       RECIPE: ${{ matrix.recipe }}
       SEED: ${{ matrix.seed }}

@@ -1,21 +1,21 @@
 name: Render Shorts video
 
-# Renders a vertical (1080x1920) 30 second action Short of the Godot Lost City on a GitHub server:
-# Godot's movie maker plays two scripted shots (godot/tests/short.gd) on a software renderer, then ffmpeg
-# joins them with captions (tools/shorts/compose.sh). Run it by hand from the Actions tab; the finished
-# video is in the run's Artifacts as short-final, the raw clips as short-clips, a test still as probe.
+# Renders vertical (1080x1920) daylight action Shorts of the Godot Lost City on a GitHub server: Godot's movie
+# maker plays a scripted shot (godot/tests/short.gd) on a software renderer, then ffmpeg adds captions
+# (tools/shorts/compose.sh). One video per seed, side by side, so the best one can be picked.
+# The videos and a contact sheet of each are in the run's Artifacts (short-seed-N), visible to people signed in to GitHub.
 on:
   push:
     branches: [shorts-video]
     paths: ["godot/tests/short.gd", "tools/shorts/**", ".github/workflows/shorts-video.yml"]
   workflow_dispatch:
     inputs:
-      seed_freeze:
-        description: "Seed of the suspense shot (changes where it happens)"
-        default: "3"
-      seed_chase:
-        description: "Seed of the chase shot"
-        default: "5"
+      shot:
+        description: "carchase, chase or freeze"
+        default: "carchase"
+      seeds:
+        description: "Seeds to render, as a JSON list (each changes where and how it plays out)"
+        default: "[1,2,3]"
 
 permissions:
   contents: read
@@ -26,17 +26,22 @@ env:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: ${{ fromJSON(github.event.inputs.seeds || '[1,2,3]') }}
+    env:
+      SHOT: ${{ github.event.inputs.shot || 'carchase' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install the software GPU, a virtual screen and ffmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 vulkan-tools ffmpeg \
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 ffmpeg \
             libxcursor1 libxinerama1 libxi6 libxrandr2 libgl1 libpulse0
           sudo apt-get install -y libasound2t64 || sudo apt-get install -y libasound2
-          vulkaninfo --summary | head -25 || true
 
       - name: Cache Godot
         id: cache
@@ -66,58 +71,31 @@ jobs:
           echo "$out"
           if echo "$out" | grep -q "SCRIPT ERROR"; then exit 1; fi
 
-      - name: Probe, one still frame at 1080x1920 on the software renderer
+      - name: Record the shot
         run: |
           mkdir -p out
           start=$(date +%s)
+          # the trace lines it prints (and the ::notice with all of them) show what happened second by second
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
-            --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 -- --play --shot="$GITHUB_WORKSPACE/out/probe.png" --frames=45
-          echo "probe took $(( $(date +%s) - start )) s for 45 frames"
-          test -s out/probe.png
+            --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
+            -s res://tests/short.gd -- --shot=$SHOT --seed=${{ matrix.seed }} --len=26 --bite=12
+          echo "recording took $(( $(date +%s) - start )) s"
+          test -s out/clip.avi
 
-      - name: Record the suspense shot
+      - name: Add captions
         run: |
-          start=$(date +%s)
-          xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
-            --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/freeze.avi" \
-            -s res://tests/short.gd -- --shot=freeze --seed=${{ inputs.seed_freeze || '3' }} --len=14 --beat=7
-          echo "freeze shot took $(( $(date +%s) - start )) s"
-          test -s out/freeze.avi
-
-      - name: Record the chase shot
-        run: |
-          start=$(date +%s)
-          xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
-            --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/chase.avi" \
-            -s res://tests/short.gd -- --shot=chase --seed=${{ inputs.seed_chase || '5' }} --len=14 --flare=4.5
-          echo "chase shot took $(( $(date +%s) - start )) s"
-          test -s out/chase.avi
-
-      - name: Join the clips with captions
-        run: bash tools/shorts/compose.sh out/freeze.avi out/chase.avi out/short.mp4
+          bash tools/shorts/compose.sh out/short.mp4 out/clip.avi \
+            "IT IS RIGHT BEHIND YOU|0.3|2.6" "FLOOR IT|6.0|8.0" "IT GOT THE CAR|12.4|14.4" \
+            "HOLD ON|15.0|17.0" "DID HE MAKE IT?|26.4|27.9"
+          mv out/short.mp4 out/${SHOT}_seed${{ matrix.seed }}.mp4
+          mv out/short_sheet.png out/${SHOT}_seed${{ matrix.seed }}_sheet.png
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: short-final
-          path: out/short.mp4
-          retention-days: 14
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: short-clips
+          name: short-seed-${{ matrix.seed }}
           path: |
-            out/freeze.avi
-            out/chase.avi
-          retention-days: 7
-          if-no-files-found: ignore
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: probe
-          path: out/probe.png
-          retention-days: 7
+            out/*.mp4
+            out/*_sheet.png
+          retention-days: 14
           if-no-files-found: ignore

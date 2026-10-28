@@ -1,32 +1,36 @@
 #!/usr/bin/env bash
-# Joins the recorded clips into one vertical 1080x1920 Short with captions, and fades out on the last line.
-#   tools/shorts/compose.sh out/freeze.avi out/chase.avi out/short.mp4
-# The clips come from godot/tests/short.gd (freeze 14 s, chase 14 s). Timings below are seconds on the joined video.
+# Turns one recorded clip into a vertical 1080x1920 Short: captions on top, two more seconds held at the end
+# and a fade to black over the last one, plus a contact sheet (one frame a second) to check the cuts at a glance.
+#   tools/shorts/compose.sh out/short.mp4 out/clip.avi "TEXT|from|to" "TEXT|from|to" ...
+# from/to are seconds on the video. The clip comes from godot/tests/short.gd.
 set -euo pipefail
 
-freeze="$1"
-chase="$2"
-out="$3"
+out="$1"
+clip="$2"
+shift 2
 font="$(dirname "$0")/../../getaway/assets/fonts/BigShouldersDisplay.ttf"
 
-# one caption: text, from second, to second
-cap() {
-  printf "drawtext=fontfile=%s:text='%s':fontsize=150:fontcolor=white:borderw=8:bordercolor=black:x=(w-text_w)/2:y=h*0.18:enable='between(t,%s,%s)'" "$font" "$1" "$2" "$3"
-}
+caps=""
+for spec in "$@"; do
+  IFS='|' read -r text from to <<< "$spec"
+  caps+=",drawtext=fontfile=${font}:text='${text}':fontsize=150:fontcolor=white:borderw=8:bordercolor=black:x=(w-text_w)/2:y=h*0.16:enable='between(t,${from},${to})'"
+done
 
-caps="$(cap 'DO NOT MOVE' 0.2 2.0),$(cap 'IT HUNTS BY MOVEMENT' 2.4 5.4),$(cap 'RUN' 7.3 9.5),$(cap 'ONE FLARE' 18.3 20.6),$(cap 'DID HE MAKE IT?' 28.2 29.9)"
+dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$clip")"
+fade_at="$(awk -v d="$dur" 'BEGIN { printf "%.2f", d + 1 }')"
+total="$(awk -v d="$dur" 'BEGIN { printf "%.2f", d + 2 }')"
+echo "clip is ${dur} s, the Short will be ${total} s"
 
-has_audio() { ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$1" | grep -q .; }
-
-if has_audio "$freeze" && has_audio "$chase"; then
-  filter="[0:v]fps=30,scale=1080:1920,setsar=1[a];[1:v]fps=30,scale=1080:1920,setsar=1[b];[a][b]concat=n=2:v=1:a=0[v0];[0:a][1:a]concat=n=2:v=0:a=1[a0];[v0]tpad=stop_mode=clone:stop_duration=2,${caps},fade=t=out:st=29:d=1[v];[a0]apad=pad_dur=2,afade=t=out:st=28.5:d=1.5[a]"
-  maps=(-map "[v]" -map "[a]")
+vf="fps=30,scale=1080:1920,setsar=1,tpad=stop_mode=clone:stop_duration=2${caps},fade=t=out:st=${fade_at}:d=1"
+if ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$clip" | grep -q .; then
+  ffmpeg -y -i "$clip" -vf "$vf" -af "apad=pad_dur=2,afade=t=out:st=${fade_at}:d=1" -t "$total" \
+    -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "$out"
 else
-  echo "no audio in the clips, making a silent video"
-  filter="[0:v]fps=30,scale=1080:1920,setsar=1[a];[1:v]fps=30,scale=1080:1920,setsar=1[b];[a][b]concat=n=2:v=1:a=0[v0];[v0]tpad=stop_mode=clone:stop_duration=2,${caps},fade=t=out:st=29:d=1[v]"
-  maps=(-map "[v]")
+  echo "no audio in the clip, making a silent video"
+  ffmpeg -y -i "$clip" -vf "$vf" -t "$total" -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p -movflags +faststart "$out"
 fi
-
-ffmpeg -y -i "$freeze" -i "$chase" -filter_complex "$filter" "${maps[@]}" \
-  -t 30 -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p -c:a aac -b:a 192k -movflags +faststart "$out"
 ls -la "$out"
+
+sheet="${out%.mp4}_sheet.png"
+ffmpeg -y -i "$out" -vf "fps=1,scale=216:384,tile=10x3" -frames:v 1 "$sheet"
+ls -la "$sheet"

@@ -31,7 +31,8 @@ var flared := false
 var broke := false
 var car: Variant = null
 var bite_t := -99.0      # when the first bite landed
-var unpaused := 0        # how many times the game paused itself and was set going again
+var events := {}         # name -> second it first happened (bite, tumble, caught, end)
+var unpaused := 0       # how many times the game paused itself and was set going again
 var trace: Array = []
 var trace_at := 0.0
 var rig: Node
@@ -93,6 +94,11 @@ func _process(dt: float) -> bool:
 			carchase(t, dt)
 	if car != null and bite_t < 0.0 and car.hp < Vehicles.HP:
 		bite_t = t
+		mark("bite", t)
+	if car != null and car.state == "tumble":
+		mark("tumble", t)
+	if g.phase == "caught" or g.phase == "lost":
+		mark("caught", t)
 	if flare_at >= 0.0 and not flared and t >= flare_at:
 		flared = true
 		g.flares = 1
@@ -100,11 +106,21 @@ func _process(dt: float) -> bool:
 	if t >= trace_at:
 		trace_at += 0.5
 		log_trace(t)
-	if t >= length:
+	# it ends when the time is up, or 1.6 s after the creature has got him (nothing more happens after that)
+	if t >= length or (events.has("caught") and t >= events.caught + 1.6):
+		mark("end", t)
 		print("shot %s done: phase %s, creature %s" % [shot, g.phase, g.mon.state])
-		print("::notice title=trace %s seed %d::%s" % [shot, seed_n, "%0A".join(trace)])
 		quit(0)
 	return false
+
+## Notes when something happened, once; the workflow reads these lines to time the captions.
+func mark(what: String, t: float) -> void:
+	if events.has(what):
+		return
+	events[what] = t
+	var line := "EVENT %s %.2f" % [what, t]
+	trace.append(line)
+	print(line)
 
 func log_trace(t: float) -> void:
 	var d := Vector2(g.mon.pos.x - g.pl.pos.x, g.mon.pos.z - g.pl.pos.z).length()
@@ -290,9 +306,10 @@ func carchase(t: float, dt: float) -> void:
 	g.mon.last_seen_t = g.time
 	g.mon.last_known = g.pl.pos
 	var cp: Vector2 = c.pos
-	while wp.size() > 1 and cp.distance_to(wp[0]) < 8.0:
+	var reach := 8.0 + absf(c.speed) * 0.6   # turn for the next waypoint sooner the faster it goes
+	while wp.size() > 1 and cp.distance_to(wp[0]) < reach:
 		wp.pop_front()
-	if wp.size() <= 1 and (wp.is_empty() or cp.distance_to(wp[0]) < 8.0):
+	if wp.size() <= 1 and (wp.is_empty() or cp.distance_to(wp[0]) < reach):
 		plan_route(cp)
 	var fv: Vector2 = g.veh.forward(c)
 	var want := atan2(wp[0].y - cp.y, wp[0].x - cp.x)
@@ -300,10 +317,15 @@ func carchase(t: float, dt: float) -> void:
 	var steer := clampf(err * 2.2, -1.0, 1.0)
 	var gap := cp.distance_to(Vector2(g.mon.pos.x, g.mon.pos.z))
 	var goal := 5.0 if bite_at >= 0.0 and t >= bite_at else 14.0
-	var des := clampf(11.0 + (gap - goal) * 0.9, 5.0, 24.0) * (1.0 - 0.55 * minf(1.0, absf(err) / 1.2))
+	# Hold the gap: faster than the creature when it is closer than the goal, slower when it has dropped back.
+	# Slow for the bends too, or it ends up in a wall (and the creature catches up).
+	var rex_sp := maxf(g.mon.speed, 6.0)
+	var des := clampf(rex_sp + (goal - gap) * 0.8, 4.0, 22.0)
+	des = maxf(des * (1.0 - 0.6 * minf(1.0, absf(err) / 0.9)), 3.5)
 	var thr := clampf((des - c.speed) * 0.5, -0.5, 1.0)
-	# wedged against something: back out
-	if absf(c.speed) < 1.0 and t > 2.0:
+	# wedged against something: back out (not while it is recovering from a bite)
+	var recovering: bool = bite_t >= 0.0 and t - bite_t < 2.5
+	if absf(c.speed) < 1.0 and t > 2.0 and not recovering:
 		still_t += dt
 	else:
 		still_t = 0.0

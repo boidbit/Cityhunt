@@ -85,7 +85,7 @@ jobs:
           echo "recording took $(( $(date +%s) - start )) s"
           test -s out/clip.avi
           # what happened, as annotations on the run page: the clip's length, the second-by-second trace, and any errors
-          info=$(ffprobe -v error -show_entries format=duration,size -of compact=p=0 out/clip.avi | tr '\n' ' ')
+          info=$(ffprobe -v error -show_entries format=duration,size:stream=width,height -of compact=p=0 out/clip.avi | tr '\n' ' ')
           echo "::notice title=clip seed ${{ matrix.seed }}::${info}"
           trace=$(grep -E '^(t=|shot )' godot.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
           echo "::notice title=trace seed ${{ matrix.seed }}::${trace}"
@@ -94,9 +94,19 @@ jobs:
 
       - name: Add captions
         run: |
-          bash tools/shorts/compose.sh out/short.mp4 out/clip.avi \
-            "IT IS RIGHT BEHIND YOU|0.3|2.6" "FLOOR IT|6.0|8.0" "IT GOT THE CAR|12.4|14.4" \
-            "HOLD ON|15.0|17.0" "DID HE MAKE IT?|26.4|27.9"
+          # captions are timed from what actually happened in the clip (EVENT lines of the director)
+          ev() { grep -m1 "^EVENT $1 " godot.log | awk '{print $3}' || true; }
+          add() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.1f", a + b }'; }
+          bite=$(ev bite); tumble=$(ev tumble); end=$(ev end); end=${end:-26}
+          caps=("IT IS RIGHT BEHIND YOU|0.3|2.4")
+          if [ -n "$bite" ]; then
+            if awk -v b="$bite" 'BEGIN { exit !(b > 5) }'; then caps+=("FLOOR IT|2.7|$(add "$bite" -0.5)"); fi
+            caps+=("IT GOT THE CAR|$(add "$bite" -0.1)|$(add "$bite" 1.8)")
+          fi
+          if [ -n "$tumble" ]; then caps+=("IT THREW THE CAR|$(add "$tumble" 0)|$(add "$tumble" 1.7)"); fi
+          caps+=("DID HE MAKE IT?|$(add "$end" -0.4)|$(add "$end" 1.9)")
+          printf '%s\n' "${caps[@]}"
+          bash tools/shorts/compose.sh out/short.mp4 out/clip.avi "${caps[@]}"
           mv out/short.mp4 out/${SHOT}_seed${{ matrix.seed }}.mp4
           mv out/short_sheet.png out/${SHOT}_seed${{ matrix.seed }}_sheet.png
           echo "::notice title=final video seed ${{ matrix.seed }}::$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/${SHOT}_seed${{ matrix.seed }}.mp4) seconds"

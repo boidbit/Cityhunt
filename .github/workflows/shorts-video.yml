@@ -117,6 +117,7 @@ jobs:
             exit 1
           fi
 
+      # recorded at 120 fps (four times the video's 30) so compose.py can blend frames into motion blur
       - name: Record the shot
         run: |
           mkdir -p out
@@ -125,8 +126,8 @@ jobs:
           set -o pipefail
           start=$(date +%s)
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
-            --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
-            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED 2>&1 | tee godot.log
+            --audio-driver Dummy --resolution 1080x1920 --fixed-fps 120 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
+            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED --fps=120 2>&1 | tee godot.log
           echo "recording took $(( $(date +%s) - start )) s"
           test -s out/clip.avi
           # what happened, as annotations on the run page: the clip, the second-by-second trace, and any errors

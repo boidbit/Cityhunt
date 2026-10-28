@@ -1,47 +1,71 @@
-## Shorts director: plays one scripted action shot for a vertical video, in daylight, with cinematic cuts and no HUD.
-## Meant to be recorded with Godot's movie maker (see tools/shorts and .github/workflows/shorts-video.yml):
-##   godot --path godot --resolution 1080x1920 --fixed-fps 30 --write-movie out/clip.avi -s res://tests/short.gd -- --mode=carchase --seed=3 --len=26
-## --mode=carchase  you drive, the T-Rex right behind; it bites the car, then throws it over (close-up chase)
-## --mode=chase     on foot, it charges from behind and you sprint away along the streets
-## --mode=freeze    on foot, it walks up to where you stand still; the beat breaks and it charges
-## --bite=SECONDS   carchase: when it is let catch up and bite (-1: never)
-## --flare=4.5      chase: throw the flare at that second (the creature is drawn to it)
-## --len=SECONDS    how long the shot lasts, then the program quits
+## Shorts director: plays one scripted, satisfying action moment for a vertical Short (1080x1920), on a bright,
+## dry day, with cinematic cuts, slow motion and no HUD. Recorded with Godot's movie maker on a GitHub server
+## (see tools/shorts and .github/workflows/shorts-video.yml):
+##   godot --path godot --resolution 1080x1920 --fixed-fps 30 --write-movie out/clip.avi -s res://tests/short.gd -- --mode=flip --seed=3
+## --mode=flip      the T-Rex runs the car down, bites it twice and throws it over (slow motion in the air)
+## --mode=ram       the car floors it straight at the T-Rex and rams it (slow motion at the hit), then gets away
+## --mode=domino    the T-Rex charges down a street of parked cars, throwing them aside one after another
+## --mode=nearmiss  its jaws snap shut on the boot three times and miss; the car pulls away and it roars
+## --mode=freeze    he hides beside a car while it walks up, sniffs about a few metres off and walks on
+## --seed=N         where in the city it happens (and the small random choices)
 ## Do not call a flag --shot, --frames, --day, --play, --loc or --stats: the game itself reads those (--shot=x quits it after 60 frames).
-## Every half second a line of trace is printed, and at the end all of it as one ::notice for the Actions page.
+## Every half second a trace line is printed, and "EVENT name seconds" lines for what happened when (bite, flip, land,
+## ram, toss_N, snap_N, roar, slow_on_N/slow_off_N, heart_on/heart_off, end): tools/shorts/compose.py lays the sound
+## effects and captions on those. Times are seconds of video, which run on while the game is slowed down.
 extends SceneTree
 
 const FPS := 30.0
-const CRUISE := 13.0      # carchase: how fast the car drives on the straight (m/s)
-const GAP := 13.0         # carchase: how far the creature runs behind the car (m, centre to centre)
-const GAP_BITE := 8.0     # ... and when it bites: its jaws are then just over the boot
-const CUTS := ["front_low", "dash_back", "side_low", "dash_back", "rex_pov"]
+const MAX_LEN := 34.0
+const LUNGES := [3.4, 7.0, 10.6]   # nearmiss: when its jaws snap at the boot
 
 var g: Game
-var shot := "carchase"
+var recipe := "flip"
 var seed_n := 1
-var length := 26.0
-var flare_at := -1.0
-var beat := 7.0
-var bite_at := 12.0
 var f := 0
 var started := -1
-var wp: Array = []
-var last_p := Vector2()
-var still_t := 0.0
-var rev_t := 0.0
-var flared := false
-var broke := false
-var car: Variant = null
-var bite_t := -99.0      # when the first bite landed
-var track: Array[Vector2] = []   # carchase: where the car has been, oldest first
-var events := {}        # name -> second it first happened (bite, tumble, caught, end)
-var unpaused := 0       # how many times the game paused itself and was set going again
+var done_at := -1.0
+var events := {}         # name -> second it first happened
 var trace: Array = []
 var trace_at := 0.0
 var rig: Node
+var unpaused := 0
+var bites := 0
 
-## Runs after the game's own _process (higher priority number = later), so it can take the camera over.
+# the car he drives
+var car: Variant = null
+var last_hp := 0
+var wp: Array = []
+var cruise := 13.0
+var still_t := 0.0
+var rev_t := 0.0
+var hold_until := -1.0
+var away := Vector2(INF, INF)    # plan routes away from here (after the ram)
+var track: Array[Vector2] = []   # where the car has been, oldest first
+var follow := false              # the creature runs `gap` behind the car along its track
+var gap := 13.0
+
+# the creature on a path of its own
+var walk := false
+var rpath: Array = []
+var rs := 0.0
+var rdir := 1.0
+var rspeed := 0.0
+var face_to := Vector2(INF, INF) # turn its head this way while it stands
+
+# domino and freeze
+var lined: Array = []            # the parked cars set out in its way
+var tossed := 0
+var hide := Vector2()
+var stop_s := 0.0
+var pause_until := -1.0
+
+# slow motion and locked cameras
+var slow_n := 0
+var slow_until := -1.0
+var lock := {}
+
+## Runs after the game's own _process (higher priority number = later): puts the creature where the shot
+## wants it and takes the camera over.
 class Rig extends Node:
 	var d
 
@@ -49,23 +73,15 @@ class Rig extends Node:
 		d = p_d
 		process_priority = 100
 
-	func _process(_dt: float) -> void:
-		d.camera()
+	func _process(dt: float) -> void:
+		d.after_game(dt)
 
 func _initialize() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--mode="):
-			shot = a.substr(7)
+			recipe = a.substr(7)
 		elif a.begins_with("--seed="):
 			seed_n = int(a.substr(7))
-		elif a.begins_with("--len="):
-			length = float(a.substr(6))
-		elif a.begins_with("--flare="):
-			flare_at = float(a.substr(8))
-		elif a.begins_with("--beat="):
-			beat = float(a.substr(7))
-		elif a.begins_with("--bite="):
-			bite_at = float(a.substr(7))
 	root.add_child(load("res://scenes/main.tscn").instantiate())
 	rig = Rig.new(self)
 	root.add_child(rig)
@@ -82,42 +98,59 @@ func _process(dt: float) -> bool:
 			setup()
 			started = f
 		return false
-	var t := (f - started) / FPS
-	# the game pauses itself when its window loses focus (as on a phone); on the virtual screen that happens
-	# a few seconds in and would freeze the rest of the video
+	var t := now()
+	# the game pauses itself when its window loses focus (as on a phone), which a virtual screen can do
 	if g.paused:
 		g.paused = false
 		g.sfx.pause_all(false)
 		unpaused += 1
-	match shot:
+	if car != null and car.hp < last_hp:
+		last_hp = car.hp
+		if recipe != "ram":
+			bites += 1
+			mark("bite_%d" % bites, t)
+			hold_until = t + 2.5
+	match recipe:
+		"ram":
+			step_ram(t, dt)
+		"domino":
+			step_domino(t)
+		"nearmiss":
+			step_nearmiss(t, dt)
 		"freeze":
-			freeze(t, dt)
-		"chase":
-			chase(t, dt)
+			step_freeze(t)
 		_:
-			carchase(t, dt)
-	if car != null and bite_t < 0.0 and car.hp < Vehicles.HP:
-		bite_t = t
-		mark("bite", t)
-	if car != null and car.state == "tumble":
-		mark("tumble", t)
-	if g.phase == "caught" or g.phase == "lost":
-		mark("caught", t)
-	if flare_at >= 0.0 and not flared and t >= flare_at:
-		flared = true
-		g.flares = 1
-		g.throw_flare()
+			step_flip(t, dt)
+	if walk:
+		rs = clampf(rs + rspeed * rdir * dt, 0.0, poly_len(rpath))
+		g.mon.speed = rspeed
+	if slow_until >= 0.0 and t >= slow_until:
+		slow_until = -1.0
+		Engine.time_scale = 1.0
+		AudioServer.set_bus_volume_db(0, 0.0)
+		mark("slow_off_%d" % slow_n, t)
 	if t >= trace_at:
 		trace_at += 0.5
 		log_trace(t)
-	# it ends when the time is up, or 1.6 s after the creature has got him (nothing more happens after that)
-	if t >= length or (events.has("caught") and t >= events.caught + 1.6):
+	if (done_at >= 0.0 and t >= done_at) or t >= MAX_LEN:
+		Engine.time_scale = 1.0
 		mark("end", t)
-		print("shot %s done: phase %s, creature %s" % [shot, g.phase, g.mon.state])
+		print("shot %s done: phase %s, creature %s" % [recipe, g.phase, g.mon.state])
 		quit(0)
 	return false
 
-## Notes when something happened, once; the workflow reads these lines to time the captions.
+func now() -> float:
+	return (f - started) / FPS
+
+func after_game(dt: float) -> void:
+	if g == null or started < 0:
+		return
+	place_rex()
+	if recipe == "domino":
+		g.pl.actor.visible = false
+	camera(now(), dt)
+
+## Notes when something happened, once.
 func mark(what: String, t: float) -> void:
 	if events.has(what):
 		return
@@ -126,11 +159,24 @@ func mark(what: String, t: float) -> void:
 	trace.append(line)
 	print(line)
 
+func end_after(t: float, sec: float) -> void:
+	if done_at < 0.0:
+		done_at = t + sec
+
+## Slow motion for dur seconds of video; the game's own sound is turned down meanwhile (the effects laid on
+## afterwards carry it).
+func slow(t: float, dur: float, scale: float) -> void:
+	slow_n += 1
+	slow_until = t + dur
+	Engine.time_scale = scale
+	AudioServer.set_bus_volume_db(0, -16.0)
+	mark("slow_on_%d" % slow_n, t)
+
 func log_trace(t: float) -> void:
 	var d := Vector2(g.mon.pos.x - g.pl.pos.x, g.mon.pos.z - g.pl.pos.z).length()
 	var sp: float = absf(car.speed) if car != null and g.pl.driving else g.pl.real_sp
-	var line := "t=%4.1f phase=%s rex=%s dist=%.0fm speed=%.1f cam=%s unpaused=%d%s" % [t, g.phase, g.mon.state, d, sp, cut(t), unpaused,
-		(" car=%s hp=%d" % [car.state, car.hp]) if car != null else ""]
+	var line := "t=%4.1f phase=%s rex=%s dist=%.0fm speed=%.1f cam=%s scale=%.2f%s" % [t, g.phase, g.mon.state, d, sp, cut(t),
+		Engine.time_scale, (" car=%s hp=%d" % [car.state, car.hp]) if car != null else ""]
 	trace.append(line)
 	print(line)
 
@@ -142,9 +188,9 @@ func setup() -> void:
 	g.settings.gfx = "high"
 	g.apply_gfx()
 	g.hud.visible = false
-	# light rain by day: wet streets, no lightning
-	g.wx_i = 0.55
-	g.wx_to = 0.55
+	# dry: no rain, no lightning, nothing the director of the game would stage
+	g.wx_i = 0.0
+	g.wx_to = 0.0
 	g.wx_t = 9999.0
 	g.dir.next_lightning = 9999.0
 	g.dir.next_cross = 9999.0
@@ -153,49 +199,83 @@ func setup() -> void:
 	g.time = 0.0
 	g.call_t = 9999.0
 	g.hud.input.sprint = false
+	g.pl.flash = false
+	g.cam.keep_aspect = Camera3D.KEEP_HEIGHT
+	bright()
 	var p := Vector2(g.pl.pos.x, g.pl.pos.z)
-	match shot:
+	match recipe:
+		"ram":
+			setup_ram(p)
+		"domino":
+			setup_domino()
+		"nearmiss":
+			setup_chase(p)
 		"freeze":
-			place_freeze(p)
-		"chase":
-			place_chase(p)
+			setup_freeze()
 		_:
-			place_carchase(p)
-	print("shot %s, seed %d, player at %s, creature at %s" % [shot, seed_n, p.round(), Vector2(g.mon.pos.x, g.mon.pos.z).round()])
+			setup_chase(p)
+	print("shot %s, seed %d, player at %s, creature at %s" % [recipe, seed_n, Vector2(g.pl.pos.x, g.pl.pos.z).round(), Vector2(g.mon.pos.x, g.mon.pos.z).round()])
 
-## A street spot between lo and hi metres from p with a clear line to it, the nearest such one.
-func far_spot(p: Vector2, lo: float, hi: float) -> Vector2:
-	var best := Vector2(INF, INF)
+## A bright, clear day: a blue haze instead of the grey rain-washed one, lighter shade, a little more exposure.
+func bright() -> void:
+	var w := g.world
+	w.fog_base = Color(0.5, 0.62, 0.8)
+	w.fog_end = 900.0
+	for e in [w.env, w.refl_env]:
+		if e == null:
+			continue
+		e.background_color = w.fog_base.linear_to_srgb()
+		e.ambient_light_color = Color(0.6, 0.63, 0.68).linear_to_srgb()
+		e.tonemap_exposure = 1.2
+	w.sky_mat.set_shader_parameter("hor", w.fog_base)
+	w.skyline_mat.set_shader_parameter("hor", w.fog_base)
+
+# ---------------------------------------------------------------- paths
+func poly_len(pts: Array) -> float:
+	var l := 0.0
+	for i in range(1, pts.size()):
+		l += (pts[i] as Vector2).distance_to(pts[i - 1])
+	return l
+
+## The point s metres along the polyline (clamped to its ends).
+func poly_at(pts: Array, s: float) -> Vector2:
+	if pts.is_empty():
+		return Vector2()
+	var left := maxf(s, 0.0)
+	for i in range(1, pts.size()):
+		var a: Vector2 = pts[i - 1]
+		var b: Vector2 = pts[i]
+		var seg := a.distance_to(b)
+		if left <= seg and seg > 0.0:
+			return a.lerp(b, left / seg)
+		left -= seg
+	return pts[-1]
+
+func poly_dir(pts: Array, s: float) -> Vector2:
+	var d := poly_at(pts, s + 1.5) - poly_at(pts, s - 1.5)
+	return d.normalized() if d.length() > 0.001 else Vector2(0, 1)
+
+## How far along the polyline its nearest point to q is.
+func poly_closest(pts: Array, q: Vector2) -> float:
+	var best := 0.0
 	var bd := INF
-	for n in g.nodes:
-		var q := Vector2(n.x, n.z)
-		var d := q.distance_to(p)
-		if d >= lo and d <= hi and g.col.walkable(q.x, q.y, 2.2) and g.col.path_clear(q.x, q.y, p.x, p.y, 1.0):
-			if d < bd:
-				bd = d
-				best = q
-	if best.x == INF:
-		for n in g.nodes:
-			var q := Vector2(n.x, n.z)
-			var d := q.distance_to(p)
-			if d >= lo and d <= hi and g.col.walkable(q.x, q.y, 2.2) and d < bd:
-				bd = d
-				best = q
+	var s := 0.0
+	for i in range(1, pts.size()):
+		var a: Vector2 = pts[i - 1]
+		var b: Vector2 = pts[i]
+		var seg := a.distance_to(b)
+		var u := 0.0
+		if seg > 0.0:
+			u = clampf((q - a).dot(b - a) / (seg * seg), 0.0, 1.0)
+		var d := a.lerp(b, u).distance_to(q)
+		if d < bd:
+			bd = d
+			best = s + u * seg
+		s += seg
 	return best
 
-## Puts the creature on a clear spot k metres behind (from, heading dir), facing along dir.
-func rex_behind(from: Vector2, dir: Vector2, k: float) -> void:
-	var at := from - dir * k
-	for kk in [k, k * 0.8, k * 1.25, k * 0.65, k * 1.5]:
-		var c: Vector2 = from - dir * kk
-		if g.col.walkable(c.x, c.y, 2.2) and g.col.path_clear(c.x, c.y, from.x, from.y, 1.2):
-			at = c
-			break
-	g.mon.pos = Vector3(at.x, 0.0, at.y)
-	g.mon.yaw = atan2(dir.x, dir.y)
-	g.mon.cur = g.nearest_node(at.x, at.y, true)
-
-## Streets to follow: a seeded random node 70 to 150 m from here, reached along the street graph.
+## Streets to drive: a seeded random node 70 to 150 m off, along the street graph; after the ram, one well away
+## from where the creature stands.
 func plan_route(from: Vector2) -> void:
 	var a := g.nearest_node(from.x, from.y, false)
 	var best := -1
@@ -206,6 +286,8 @@ func plan_route(from: Vector2) -> void:
 		if d < 70.0 or d > 150.0:
 			continue
 		var s := randf()
+		if away.x != INF:
+			s += q.distance_to(away) / 60.0
 		if s > bs:
 			bs = s
 			best = i
@@ -216,15 +298,15 @@ func plan_route(from: Vector2) -> void:
 	if wp.is_empty():
 		wp.append(from + Vector2(50, 0))
 
-func place_carchase(p: Vector2) -> void:
-	# the fastest parked car near the start
+# ---------------------------------------------------------------- the car
+func pick_car(p: Vector2) -> void:
 	var best: Variant = null
 	var bs := INF
 	for c in g.veh.cars:
 		if c.state != "parked":
 			continue
 		var d: float = (c.pos as Vector2).distance_to(p)
-		var s := d - (25.0 if c.vm == "agera" else 0.0)
+		var s := d - (25.0 if c.vm == "agera" else 0.0) + randf() * 10.0
 		if d < 90.0 and s < bs:
 			bs = s
 			best = c
@@ -234,101 +316,46 @@ func place_carchase(p: Vector2) -> void:
 				best = c
 				break
 	car = best
+	last_hp = car.hp
+
+## Puts him in the car facing along the route, with the game's chase camera already pulled back behind it
+## (left to itself it starts close, inside the car).
+func get_in() -> Vector2:
 	var cp: Vector2 = car.pos
 	plan_route(cp)
 	var dir := Vector2.from_angle(-car.yaw)
 	if wp.size() > 1:
-		dir = (wp[1] - cp).normalized() if cp.distance_to(wp[0]) < 6.0 else (wp[0] - cp).normalized()
+		dir = ((wp[1] if cp.distance_to(wp[0]) < 6.0 else wp[0]) - cp).normalized()
 	car.yaw = -dir.angle()
 	g.pl.pos = Vector3(cp.x, g.world.ground_at(cp.x, cp.y, 0.0), cp.y)
 	g.enter_car(car)
-	rex_behind(cp, dir, GAP)
-	g.mon.start_chase()
-	g.mon.last_seen_t = g.time
-	# the track behind the car to start with: a straight line back
+	g.pl.cam_cur = 8.0
+	g.pl.cam_yaw = atan2(dir.x, dir.y)
 	for k in range(100, -1, -1):
 		track.append(cp - dir * (k * 0.4))
+	return dir
 
-func place_freeze(p: Vector2) -> void:
-	var q := far_spot(p, 30.0, 48.0)
-	if q.x == INF:
-		q = p + Vector2(35, 0)
-	g.mon.pos = Vector3(q.x, 0.0, q.y)
-	g.mon.yaw = atan2(p.x - q.x, p.y - q.y)
-	g.mon.cur = g.nearest_node(q.x, q.y, true)
-	# it comes to investigate a noise a few metres short of him and stops to sniff and scan
-	var dir := (p - q).normalized()
-	var spot := p
-	for k in [10.0, 12.0, 9.0, 14.0, 8.0]:
-		var c: Vector2 = p - dir * k
-		if g.col.walkable(c.x, c.y, 2.2) and g.col.path_clear(q.x, q.y, c.x, c.y, 1.6):
-			spot = c
-			break
-	g.mon.hear(spot.x, spot.y)
-	g.mon.lure_t = 6.0
-	g.pl.crouch = true
-	g.hud.set_toggle("crouch", true)
-
-func place_chase(p: Vector2) -> void:
-	var q := far_spot(p, 26.0, 38.0)
-	if q.x == INF:
-		q = p + Vector2(-30, 0)
-	g.mon.pos = Vector3(q.x, 0.0, q.y)
-	g.mon.yaw = atan2(p.x - q.x, p.y - q.y)
-	g.mon.cur = g.nearest_node(q.x, q.y, true)
-	g.mon.start_chase()
-	route_away()
-
-## Streets to run along on foot: the farthest node (60 to 110 m) from the creature that is reachable from here.
-func route_away() -> void:
-	var p := Vector2(g.pl.pos.x, g.pl.pos.z)
-	var m := Vector2(g.mon.pos.x, g.mon.pos.z)
-	var best := -1
-	var bs := -INF
-	for i in g.nodes.size():
-		var q := Vector2(g.nodes[i].x, g.nodes[i].z)
-		var d := q.distance_to(p)
-		if d < 60.0 or d > 110.0:
-			continue
-		var s := q.distance_to(m) - 0.5 * d
-		if s > bs:
-			bs = s
-			best = i
-	if best < 0:
-		best = g.nearest_node(p.x + 60.0, p.y, false)
-	wp = []
-	for i in g.bfs(g.nearest_node(p.x, p.y, true), best):
-		wp.append(Vector2(g.nodes[i].x, g.nodes[i].z))
-
-# ---------------------------------------------------------------- the shots
-## Drives the streets with the creature right behind: the gap it keeps is the drama. At first it stays about
-## 14 m back (close in every shot), from bite_at it is let catch up, bites (a shove), bites again (over she goes).
-func carchase(t: float, dt: float) -> void:
+## One frame of driving along the route at `cruise`, slowing for bends and backing out when wedged.
+func drive(t: float, dt: float) -> void:
 	var inp: Dictionary = g.hud.input
 	inp.jx = 0.0
 	inp.jy = 0.0
-	var c: Variant = car
-	if c == null or not g.pl.driving or c.state != "driven":
+	inp.sprint = false
+	if car == null or not g.pl.driving or car.state != "driven":
 		return
-	g.mon.last_seen_t = g.time
-	g.mon.last_known = g.pl.pos
-	var cp: Vector2 = c.pos
-	var reach := 8.0 + absf(c.speed) * 0.6   # turn for the next waypoint sooner the faster it goes
+	var cp: Vector2 = car.pos
+	var reach := 8.0 + absf(car.speed) * 0.6
 	while wp.size() > 1 and cp.distance_to(wp[0]) < reach:
 		wp.pop_front()
-	if wp.size() <= 1 and (wp.is_empty() or cp.distance_to(wp[0]) < reach):
+	if wp.is_empty() or (wp.size() == 1 and cp.distance_to(wp[0]) < reach):
 		plan_route(cp)
-	var fv: Vector2 = g.veh.forward(c)
+	var fv: Vector2 = g.veh.forward(car)
 	var want := atan2(wp[0].y - cp.y, wp[0].x - cp.x)
 	var err := U.ang_diff(atan2(fv.y, fv.x), want)
 	var steer := clampf(err * 2.2, -1.0, 1.0)
-	# A steady cruise, slowed for the bends (or it ends up in a wall). The creature is not left to its own
-	# pathfinding: rex_follow() keeps it a set distance behind along the car's own track.
-	var des := maxf(CRUISE * (1.0 - 0.6 * minf(1.0, absf(err) / 0.9)), 4.0)
-	var thr := clampf((des - c.speed) * 0.6, -0.5, 1.0)
-	# wedged against something: back out (not while it is recovering from a bite)
-	var recovering: bool = bite_t >= 0.0 and t - bite_t < 2.5
-	if absf(c.speed) < 1.0 and t > 2.0 and not recovering:
+	var des := maxf(cruise * (1.0 - 0.6 * minf(1.0, absf(err) / 0.9)), 4.0)
+	var thr := clampf((des - car.speed) * 0.6, -0.5, 1.0)
+	if absf(car.speed) < 1.0 and t > 2.0 and t > hold_until:
 		still_t += dt
 	else:
 		still_t = 0.0
@@ -342,11 +369,46 @@ func carchase(t: float, dt: float) -> void:
 	inp.jy = thr
 	inp.jx = steer
 
-## How far behind the car the creature runs at time t: GAP, closing to GAP_BITE over the 2 s before bite_at.
-func gap_at(t: float) -> float:
-	if bite_at < 0.0 or t < bite_at - 2.0:
-		return GAP
-	return lerpf(GAP, GAP_BITE, clampf((t - (bite_at - 2.0)) / 2.0, 0.0, 1.0))
+## Keeps the creature on his trail while he drives.
+func keep_chasing() -> void:
+	var m := g.mon
+	if m.state == "STUN" or m.state == "ATTACK":
+		return
+	if m.state != "CHASE":
+		m.set_state("CHASE")
+	m.awareness = 1.0
+	m.last_seen_t = g.time
+	m.last_known = g.pl.pos
+	if follow and car != null:
+		m.speed = clampf(absf(car.speed) + 3.0, 6.0, 11.0)
+
+# ---------------------------------------------------------------- the creature
+## Where the shot wants the creature this frame, after the game has moved it: on the car's track `gap`
+## behind it, or `rs` along its own path.
+func place_rex() -> void:
+	var m := g.mon
+	var p := Vector2()
+	var h := Vector2()
+	if follow and car != null and g.pl.driving and car.state == "driven":
+		var cp: Vector2 = car.pos
+		if track.is_empty() or track[-1].distance_to(cp) > 0.4:
+			track.append(cp)
+			if track.size() > 500:
+				track.remove_at(0)
+		p = point_behind(gap)
+		h = p - point_behind(gap + 3.0)
+	elif walk:
+		p = poly_at(rpath, rs)
+		h = poly_dir(rpath, rs) * rdir
+	else:
+		return
+	m.pos = Vector3(p.x, 0.0, p.y)
+	if face_to.x != INF:
+		m.yaw += U.ang_diff(m.yaw, atan2(face_to.x - p.x, face_to.y - p.y)) * 0.05
+	elif h.length() > 0.01:
+		m.yaw = atan2(h.x, h.y)
+	m.actor.position = Vector3(p.x, g.world.ground_at(p.x, p.y, 0.0), p.y)
+	m.actor.rotation.y = m.yaw
 
 ## The spot d metres back along the car's track.
 func point_behind(d: float) -> Vector2:
@@ -360,160 +422,504 @@ func point_behind(d: float) -> Vector2:
 		prev = track[i]
 	return prev
 
-## Puts the creature on the car's track, GAP behind it, running along it. Once he is out of the car it is
-## the creature's own again. Runs after the game's own update, with the camera.
-func rex_follow() -> void:
-	if shot != "carchase" or car == null or not g.pl.driving or car.state != "driven":
-		return
+# ---------------------------------------------------------------- flip and nearmiss: chased by car
+func setup_chase(p: Vector2) -> void:
+	pick_car(p)
+	var dir := get_in()
 	var cp: Vector2 = car.pos
-	if track.is_empty() or track[-1].distance_to(cp) > 0.4:
-		track.append(cp)
-		if track.size() > 500:
-			track.remove_at(0)
-	var t := (f - started) / FPS
-	var gap := gap_at(t)
-	var p := point_behind(gap)
-	var h := p - point_behind(gap + 3.0)
-	var m: Monster = g.mon
-	m.pos = Vector3(p.x, 0.0, p.y)
-	if h.length() > 0.01:
-		m.yaw = atan2(h.x, h.y)
-	m.speed = clampf(absf(car.speed) + 3.0, 6.0, 11.0)
+	var at := cp - dir * gap
+	g.mon.pos = Vector3(at.x, 0.0, at.y)
+	g.mon.yaw = atan2(dir.x, dir.y)
+	g.mon.start_chase()
+	follow = true
+
+## Close behind for six seconds, then it closes in: a bite that shoves the car, a second that throws it
+## over (slow motion in the air), it lands, the creature roars.
+func step_flip(t: float, dt: float) -> void:
+	drive(t, dt)
+	keep_chasing()
+	gap = 13.0 if t < 6.0 else lerpf(13.0, 8.0, clampf((t - 6.0) / 1.5, 0.0, 1.0))
+	if car.state == "tumble" and not events.has("flip"):
+		mark("flip", t)
+		slow(t, 2.4, 0.3)
+		lock_orbit()
+	if events.has("flip") and car.state != "tumble" and not events.has("land"):
+		mark("land", t)
+		end_after(t, 2.6)
+	if events.has("land") and not events.has("roar") and t > events.land + 0.4:
+		g.mon.roar_t = 1.4
+		mark("roar", t)
+	if t > 22.0 and not events.has("flip"):
+		end_after(t, 0.5)   # it never got the second bite in: cut it short rather than drag on
+
+## Its jaws snap shut just short of the boot three times; the last in slow motion. Then he floors it, it
+## falls back and roars.
+func step_nearmiss(t: float, dt: float) -> void:
+	drive(t, dt)
+	keep_chasing()
+	g.mon.bite_cd = 99.0
+	var base := 13.0
+	if t > 12.2:
+		cruise = 22.0
+		base = 13.0 + (t - 12.2) * 6.0
+		if not events.has("roar") and t > 13.0:
+			g.mon.roar_t = 1.6
+			mark("roar", t)
+		end_after(t, 4.4)
+	var dip := 0.0
+	for i in LUNGES.size():
+		var L: float = LUNGES[i]
+		dip = maxf(dip, 1.0 - clampf(absf(t - L) / 1.1, 0.0, 1.0))
+		if t >= L - 0.25 and not events.has("snap_%d" % (i + 1)):
+			mark("snap_%d" % (i + 1), t)
+			g.mon.actor.play_once("attack", 1.4)
+			if i == LUNGES.size() - 1:
+				slow(t, 1.8, 0.35)
+	gap = base - 5.2 * smoothstep(0.0, 1.0, dip)
+
+# ---------------------------------------------------------------- ram
+## The creature stands at the far end of the street, roars and charges; he floors it straight at it.
+func setup_ram(p: Vector2) -> void:
+	pick_car(p)
+	get_in()
+	cruise = 21.0
+	rpath = [car.pos] + wp.duplicate()
+	var L := poly_len(rpath)
+	if L < 60.0:
+		# a longer street: try the route from the far end too
+		plan_route(car.pos)
+		rpath = [car.pos] + wp.duplicate()
+		L = poly_len(rpath)
+	rs = clampf(L - 4.0, 30.0, 90.0)
+	rdir = -1.0
+	rspeed = 0.0
+	walk = true
+	var at := poly_at(rpath, rs)
+	g.mon.pos = Vector3(at.x, 0.0, at.y)
+	g.mon.start_chase()
+	g.mon.bite_cd = 99.0
+
+func step_ram(t: float, dt: float) -> void:
+	var m := g.mon
+	if not events.has("ram"):
+		drive(t, dt)
+		keep_chasing()
+		m.bite_cd = 99.0
+		if t > 0.3 and not events.has("roar"):
+			m.roar_t = 1.2
+			mark("roar", t)
+		rspeed = 0.0 if t < 1.4 else minf(8.5, (t - 1.4) * 6.0)
+		var d: float = (car.pos as Vector2).distance_to(Vector2(m.pos.x, m.pos.z))
+		if slow_n == 0 and d < 3.4 + (absf(car.speed) + rspeed) * 0.4:
+			slow(t, 2.6, 0.25)
+			lock_impact()
+		if m.state == "STUN":
+			mark("ram", t)
+			walk = false
+			away = Vector2(m.pos.x, m.pos.z)
+			plan_route(car.pos)
+			hold_until = t + 3.0
+			rev_t = 1.0
+			cruise = 16.0
+			end_after(t, 5.5)
+		if t > 16.0:
+			mark("miss", t)
+			end_after(t, 0.5)
+	else:
+		drive(t, dt)
+
+# ---------------------------------------------------------------- domino
+## A straight street with nothing much in it: five or six parked cars are set out along it, staggered either
+## side of the line the creature will charge down.
+func setup_domino() -> void:
+	var cands := []
+	for need in [55.0, 45.0, 35.0]:
+		for i in g.nodes.size():
+			var a := Vector2(g.nodes[i].x, g.nodes[i].z)
+			for j in g.nodes[i].n:
+				if int(j) < i:
+					continue
+				var b := Vector2(g.nodes[j].x, g.nodes[j].z)
+				var L := a.distance_to(b)
+				if L < need:
+					continue
+				var u := (b - a) / L
+				var bad := 0
+				for k in range(0, int(L), 4):
+					var q := a + u * k
+					if not g.col.walkable(q.x, q.y, 2.0):
+						bad += 1
+				if bad <= 2:
+					cands.append([a, b])
+		if cands.size():
+			break
+	var a: Vector2
+	var b: Vector2
+	if cands.size():
+		var pick: Array = cands[randi() % cands.size()]
+		a = pick[0]
+		b = pick[1]
+	else:
+		a = Vector2(g.nodes[0].x, g.nodes[0].z)
+		b = Vector2(g.nodes[g.nodes[0].n[0]].x, g.nodes[g.nodes[0].n[0]].z)
+	if randf() < 0.5:
+		var s := a
+		a = b
+		b = s
+	var L := a.distance_to(b)
+	var u := (b - a) / L
+	var n := Vector2(-u.y, u.x)
+	var start := a - u * 10.0 if g.col.walkable((a - u * 10.0).x, (a - u * 10.0).y, 2.0) else a
+	rpath = [start, b + u * 4.0]
+	# the cars: the nearest parked ones, moved into the street
+	var free: Array = g.veh.cars.filter(func(c): return c.state == "parked")
+	var mid := a.lerp(b, 0.5)
+	free.sort_custom(func(x, y): return (x.pos as Vector2).distance_to(mid) < (y.pos as Vector2).distance_to(mid))
+	var count := clampi(int((L - 12.0) / 7.5), 3, 6)
+	for k in count:
+		if k >= free.size():
+			break
+		var c: Dictionary = free[k]
+		var along := 12.0 + k * (L - 14.0) / maxf(count - 1, 1)
+		var side := (1.0 if k % 2 == 0 else -1.0) * randf_range(0.6, 1.4)
+		var p := a + u * along + n * side
+		c.pos = p
+		c.yaw = -u.angle() + randf_range(-0.35, 0.35) + (PI if randf() < 0.5 else 0.0)
+		g.veh._apply(c)
+		g.veh._place_box(c)
+		g.world.move_car_halos(c.i, g.veh.xform(c), false)
+		lined.append(c)
+	# him: well out of the way
+	var far := 0
+	var fd := 0.0
+	for i in g.nodes.size():
+		var d := Vector2(g.nodes[i].x, g.nodes[i].z).distance_to(mid)
+		if d > fd:
+			fd = d
+			far = i
+	g.pl.pos = Vector3(g.nodes[far].x, 0.0, g.nodes[far].z)
+	g.pl.actor.position = g.pl.pos
+	rs = 0.0
+	rdir = 1.0
+	rspeed = 0.0
+	walk = true
+	var at := poly_at(rpath, 0.0)
+	g.mon.pos = Vector3(at.x, 0.0, at.y)
+	g.mon.yaw = atan2(u.x, u.y)
+	g.mon.set_state("CHASE")
+
+func step_domino(t: float) -> void:
+	var m := g.mon
+	m.awareness = 1.0
 	m.last_seen_t = g.time
-	m.last_known = g.pl.pos
-	m.actor.position = Vector3(p.x, g.world.ground_at(p.x, p.y, 0.0), p.y)
-	m.actor.rotation.y = m.yaw
-
-func freeze(t: float, dt: float) -> void:
-	var inp: Dictionary = g.hud.input
-	if t < beat:
-		# it must not notice him before the beat; the ground shakes and the tension builds
-		g.mon.awareness = minf(g.mon.awareness, 0.3)
-		inp.jx = 0.0
-		inp.jy = 0.0
-		face_creature(dt)
-	elif not broke:
-		broke = true
-		g.mon.start_chase()
-		g.pl.crouch = false
-		g.hud.set_toggle("crouch", false)
-		route_away()
+	m.bite_cd = 99.0
+	if m.state != "CHASE":
+		m.set_state("CHASE")
+	if t > 0.2 and not events.has("roar"):
+		m.roar_t = 1.0
+		mark("roar", t)
+	var L := poly_len(rpath)
+	if rs < L - 2.0:
+		rspeed = 0.0 if t < 1.2 else minf(9.5, (t - 1.2) * 7.0)
 	else:
-		steer_foot(dt)
+		rspeed = 0.0
+		if not events.has("roar_end"):
+			m.roar_t = 1.4
+			mark("roar_end", t)
+			end_after(t, 2.6)
+	# throw whatever is in front of it (the game's own charge does this too, along its own heading)
+	var p := poly_at(rpath, rs)
+	var fw := poly_dir(rpath, rs)
+	if rspeed > 3.0:
+		var front := p + fw * 2.0
+		for c in g.veh.cars_hit(front, Monster.BODY_R + 1.0):
+			var dir: Vector2 = (((c.pos as Vector2) - p).normalized() + fw * 1.2).normalized()
+			g.veh.knock(c, dir, randf_range(0.75, 1.0))
+	for c in g.veh.cars:
+		if c.state == "tumble" and not c.has("_tossed"):
+			c["_tossed"] = true
+			tossed += 1
+			mark("toss_%d" % tossed, t)
+			if tossed == 1:
+				slow(t, 1.3, 0.4)
+			elif tossed == lined.size() - 1 and slow_n < 2:
+				slow(t, 2.0, 0.3)
+	if t > 26.0:
+		end_after(t, 0.5)
 
-func chase(_t: float, dt: float) -> void:
-	steer_foot(dt)
+# ---------------------------------------------------------------- freeze
+## He crouches at a hiding place by the street; it comes walking along the street, stops a few metres off to
+## sniff and look about, then walks on.
+func setup_freeze() -> void:
+	var opts := []
+	for h in g.hides:
+		var a := g.nearest_node(h.x, h.y, true)
+		if Vector2(g.nodes[a].x, g.nodes[a].z).distance_to(h) < 14.0:
+			opts.append(h)
+	hide = opts[randi() % opts.size()] if opts.size() else g.hides[0]
+	g.pl.pos = Vector3(hide.x, g.world.ground_at(hide.x, hide.y, 0.0), hide.y)
+	g.pl.actor.position = g.pl.pos
+	g._hide()
+	var a := g.nearest_node(hide.x, hide.y, true)
+	# from a street node 28-48 m off on one side to one on the other
+	var ring := []
+	for i in g.nodes.size():
+		var d := Vector2(g.nodes[i].x, g.nodes[i].z).distance_to(hide)
+		if d > 28.0 and d < 48.0:
+			ring.append(i)
+	var p0 := a
+	var p1 := a
+	var best := 2.0
+	for i in ring:
+		for j in ring:
+			var di := (Vector2(g.nodes[i].x, g.nodes[i].z) - hide).normalized()
+			var dj := (Vector2(g.nodes[j].x, g.nodes[j].z) - hide).normalized()
+			var c := di.dot(dj) + randf() * 0.2
+			if c < best:
+				best = c
+				p0 = i
+				p1 = j
+	rpath = []
+	for i in g.bfs(p0, a):
+		rpath.append(Vector2(g.nodes[i].x, g.nodes[i].z))
+	var second := g.bfs(a, p1)
+	for k in range(1, second.size()):
+		rpath.append(Vector2(g.nodes[second[k]].x, g.nodes[second[k]].z))
+	if rpath.size() < 2:
+		rpath = [hide + Vector2(30, 6), hide + Vector2(-30, 6)]
+	# where it stops: short of the nearest point, at least 5.5 m from him
+	stop_s = poly_closest(rpath, hide)
+	while stop_s > 0.0 and poly_at(rpath, stop_s).distance_to(hide) < 5.5:
+		stop_s -= 0.5
+	rs = 0.0
+	rdir = 1.0
+	rspeed = 0.0
+	walk = true
+	var at := poly_at(rpath, 0.0)
+	g.mon.pos = Vector3(at.x, 0.0, at.y)
+	g.mon.state = "PATROL"
 
-## Sprints along the waypoints.
-func steer_foot(dt: float) -> void:
-	var inp: Dictionary = g.hud.input
-	inp.jx = 0.0
-	inp.jy = 0.0
-	inp.sprint = true
-	if wp.is_empty():
-		route_away()
-		return
-	var p := Vector2(g.pl.pos.x, g.pl.pos.z)
-	while wp.size() > 1 and p.distance_to(wp[0]) < 2.0:
-		wp.pop_front()
-	var d: Vector2 = wp[0] - p
-	var want := atan2(d.x, d.y)
-	g.pl.cam_yaw += U.ang_diff(g.pl.cam_yaw, want) * minf(1.0, dt * 6.0)
-	inp.jy = 1.0
-	if p.distance_to(last_p) < 0.02:
-		still_t += dt
-		if still_t > 1.5:
-			route_away()
-			still_t = 0.0
+func step_freeze(t: float) -> void:
+	var m := g.mon
+	m.awareness = 0.0
+	var d := Vector2(m.pos.x, m.pos.z).distance_to(hide)
+	if pause_until < 0.0:
+		m.state = "PATROL"
+		m.pause_t = 0.0
+		rspeed = 2.6
+		face_to = Vector2(INF, INF)
+		if d < 16.0:
+			mark("heart_on", t)
+		if rs >= stop_s:
+			pause_until = t + 5.5
+			mark("sniff", t)
+			slow(t, 1.6, 0.5)
+	elif t < pause_until:
+		rspeed = 0.0
+		m.state = "INVESTIGATE"
+		m.phase2 = 1
+		m.pause_t = 9.0
+		m.lure_t = 9.0
+		face_to = hide
 	else:
-		still_t = 0.0
-	last_p = p
-
-func face_creature(dt: float) -> void:
-	var want := atan2(g.mon.pos.x - g.pl.pos.x, g.mon.pos.z - g.pl.pos.z)
-	g.pl.cam_yaw += U.ang_diff(g.pl.cam_yaw, want) * minf(1.0, dt * 2.0)
+		face_to = Vector2(INF, INF)
+		m.state = "PATROL"
+		m.pause_t = 0.0
+		m.lure_t = 0.0
+		rspeed = 2.8
+		if d > 18.0:
+			mark("heart_off", t)
+		if d > 26.0 or rs >= poly_len(rpath) - 0.5:
+			end_after(t, 1.5)
 
 # ---------------------------------------------------------------- the camera
-## Which shot the camera is on at time t: the cut list for each shot.
+## Which camera at time t.
 func cut(t: float) -> String:
-	if shot == "carchase":
-		if car == null or car.state == "tumble" or not g.pl.driving:
-			return "game"
-		if bite_t >= 0.0 and t - bite_t < 1.3:
-			return "side_low"
-		return CUTS[int(t / 1.7) % CUTS.size()]
-	if shot == "freeze":
-		if t < 2.0:
-			return "face"
-		if t < beat - 1.5:
-			return "game"
-		if t < beat + 0.8:
-			return "face"
-		if t < beat + 3.5:
-			return "side"
-		return "game"
-	if t < 2.0:
-		return "side"
-	if t < 5.5:
-		return "game"
-	if t < 7.5:
-		return "side"
-	return "game"
+	match recipe:
+		"ram":
+			if slow_until >= 0.0 and not lock.is_empty():
+				return "locked"
+			if events.has("ram"):
+				return "rex_face" if t - events.ram < 2.4 else "dash_back"
+			if t < 1.6:
+				return "rex_face"
+			if t < 2.8:
+				return "front_low"
+			return "hood"
+		"domino":
+			if slow_until >= 0.0:
+				return "dom_side"
+			if t < 1.4:
+				return "dom_front"
+			if events.has("roar_end"):
+				return "dom_front"
+			return ["dom_side", "dom_front", "dom_high"][int((t - 1.4) / 2.0) % 3]
+		"freeze":
+			if t < 2.2:
+				return "feet"
+			if pause_until >= 0.0 and t < pause_until:
+				return ["hide_pov", "rex_close", "hide_pov", "wide"][int((t - (pause_until - 5.5)) / 1.5) % 4]
+			if pause_until < 0.0:
+				return "hide_pov" if t < 7.0 else ["wide", "hide_pov"][int(t / 2.5) % 2]
+			return "hide_pov"
+		"nearmiss":
+			if not g.pl.driving:
+				return "game"
+			if slow_until >= 0.0:
+				return "side_low"
+			if t > 12.2:
+				return "dash_back"
+			for L in LUNGES:
+				if absf(t - L) < 0.8:
+					return "dash_back" if L == LUNGES[0] else "side_low"
+			return ["front_low", "rex_pov", "front_low", "dash_back"][int(t / 1.6) % 4]
+		_:
+			if events.has("flip") and slow_until >= 0.0 and not lock.is_empty():
+				return "locked"
+			if events.has("land"):
+				return "rex_face"
+			if car != null and (car.state == "tumble" or not g.pl.driving):
+				return "game"
+			if bites > 0:
+				return "side_low"
+			return ["dash_back", "front_low", "side_low", "rex_pov"][int(t / 1.7) % 4]
 
 ## A camera position pulled in short of a wall between from and want.
 func pulled(from: Vector3, want: Vector3) -> Vector3:
 	var k: float = g.col.ray3(from, want, 0.25)
-	return from.lerp(want, clampf(k * 0.92, 0.12, 1.0))
+	return from.lerp(want, clampf(k * 0.92, 0.1, 1.0))
 
-func camera() -> void:
-	if g == null or started < 0:
-		return
-	rex_follow()
-	var t := (f - started) / FPS
+func lock_orbit() -> void:
+	var cp := Vector3(car.pos.x, car.y, car.pos.y)
+	var m := g.mon
+	var side := atan2(cp.z - m.pos.z, cp.x - m.pos.x) + PI * 0.5
+	lock = {c = cp, a = side, t0 = now()}
+
+func lock_impact() -> void:
+	var m := g.mon
+	var cp := Vector3(car.pos.x, 0.0, car.pos.y)
+	var mid := cp.lerp(m.pos, 0.6)
+	var fv: Vector2 = g.veh.forward(car)
+	var perp := Vector3(-fv.y, 0.0, fv.x)
+	var p := pulled(mid + Vector3(0, 1.0, 0), mid + perp * 10.0 + Vector3(0, 1.1, 0))
+	lock = {p = p, look = mid + Vector3(0, 1.6, 0), t0 = now()}
+
+func camera(t: float, _dt: float) -> void:
 	var mode := cut(t)
 	if mode == "game":
-		return   # the game's own camera over the player's shoulder or behind the car
+		return   # the game's own chase camera behind the car
 	var m: Monster = g.mon
 	var fwd := Vector3(sin(m.yaw), 0.0, cos(m.yaw))
 	var right := Vector3(-cos(m.yaw), 0.0, sin(m.yaw))
-	var c: Camera3D = g.cam
-	var shake := minf(1.0, g.tremor + 0.3)
-	var jit := Vector3(sin(t * 23.0), sin(t * 31.0 + 1.0), 0.0) * 0.03 * shake
 	var rhead := m.pos + fwd * 3.4 + Vector3(0, 3.0, 0)
-	if car != null and shot == "carchase":
+	var shake := minf(1.0, g.tremor * 0.8 + 0.15)
+	var jit := Vector3(sin(t * 23.0), sin(t * 31.0 + 1.0), sin(t * 17.0)) * 0.03 * shake
+	var pos := Vector3()
+	var look := Vector3()
+	var fov := 66.0
+	var on_car := car != null and g.pl.driving and car.state == "driven"
+	var cpos := Vector3()
+	var cf := Vector3(0, 0, 1)
+	var cr := Vector3(1, 0, 0)
+	var hl := 2.3
+	var hw := 1.0
+	if car != null:
 		var fv: Vector2 = g.veh.forward(car)
-		var cf := Vector3(fv.x, 0.0, fv.y)
-		var cr := Vector3(-fv.y, 0.0, fv.x)
-		var cpos := Vector3(car.pos.x, car.y, car.pos.y)
-		var wobble := jit * (1.0 + absf(car.speed) * 0.25)
-		match mode:
-			"front_low":
-				# ahead of the car, low, looking back along it: the creature fills the gap behind it
-				c.position = pulled(cpos + Vector3(0, 1.0, 0), cpos + cf * 6.5 + cr * 1.4 * sin(t * 0.8) + Vector3(0, 0.9, 0)) + wobble
-				c.fov = 70.0
-				c.look_at(cpos.lerp(rhead, 0.4) + Vector3(0, 0.6, 0))
-			"dash_back":
-				# on the boot looking back at it
-				c.position = cpos - cf * 1.5 + Vector3(0, 1.5, 0) + wobble
-				c.fov = 76.0
-				c.look_at(rhead)
-			"side_low":
-				c.position = pulled(cpos + Vector3(0, 0.8, 0), cpos + cr * 5.5 - cf * 2.0 + Vector3(0, 0.7, 0)) + wobble
-				c.fov = 64.0
-				c.look_at(cpos.lerp(rhead, 0.4) + Vector3(0, 1.0, 0))
-			_:
-				# over the creature's back at the car
-				c.position = m.pos - fwd * 2.5 + right * 2.0 + Vector3(0, 4.6, 0) + wobble
-				c.fov = 60.0
-				c.look_at(cpos + Vector3(0, 1.0, 0))
-		return
+		cf = Vector3(fv.x, 0.0, fv.y)
+		cr = Vector3(-fv.y, 0.0, fv.x)
+		cpos = Vector3(car.pos.x, car.y, car.pos.y)
+		hl = car.size.x * 0.5
+		hw = car.size.z * 0.5
+	var wob := jit * (1.0 + (absf(car.speed) * 0.2 if on_car else 0.0))
 	match mode:
-		"face":
-			var head := m.pos + fwd * 3.6 + Vector3(0, 2.8, 0)
-			c.position = head + fwd * 9.0 + Vector3(0.0, -1.7, 0.0) + right * 1.5 * sin(t * 0.5) + jit
-			c.fov = 58.0
-			c.look_at(head + Vector3(0, 0.1, 0))
-		"side":
-			c.position = m.pos + fwd * 2.5 + right * (7.5 + 1.0 * sin(t * 0.7)) + Vector3(0, 0.9, 0) + jit
-			c.fov = 66.0
-			c.look_at(m.pos + fwd * 1.5 + Vector3(0, 2.0, 0))
+		"front_low":
+			# ahead of the bonnet, low, looking back along the car: the creature fills the street behind it
+			pos = pulled(cpos + cf * (hl + 0.4) + Vector3(0, 1.0, 0), cpos + cf * (hl + 6.0) + cr * 1.3 * sin(t * 0.8) + Vector3(0, 0.9, 0)) + wob
+			look = cpos.lerp(rhead, 0.45) + Vector3(0, 0.5, 0)
+			fov = 64.0
+		"dash_back":
+			# just behind and above the boot, outside the car, looking back at it
+			pos = cpos - cf * (hl + 1.3) + cr * 0.6 + Vector3(0, 1.9, 0) + wob
+			look = rhead
+			fov = 70.0
+		"side_low":
+			pos = pulled(cpos + cr * (hw + 0.4) + Vector3(0, 0.8, 0), cpos + cr * (hw + 5.5) - cf * 2.0 + Vector3(0, 0.7, 0)) + wob
+			look = cpos.lerp(rhead, 0.4) + Vector3(0, 1.0, 0)
+			fov = 62.0
+		"rex_pov":
+			pos = m.pos - fwd * 2.5 + right * 2.2 + Vector3(0, 4.8, 0) + wob
+			look = cpos + Vector3(0, 1.0, 0)
+			fov = 58.0
+		"hood":
+			# on the bonnet looking ahead: it charges at the lens
+			pos = cpos + cf * (hl + 0.2) + Vector3(0, 1.3, 0) + wob
+			look = rhead - Vector3(0, 0.6, 0)
+			fov = 60.0
+		"rex_face":
+			pos = pulled(rhead, rhead + fwd * 9.0 + right * 1.5 * sin(t * 0.5) + Vector3(0, -1.9, 0)) + jit
+			look = rhead + Vector3(0, 0.2, 0)
+			fov = 56.0
+		"locked":
+			if lock.has("p"):
+				pos = lock.p
+				look = lock.look
+			else:
+				var a: float = lock.a + (t - lock.t0) * 0.35
+				var c: Vector3 = lock.c
+				pos = pulled(c + Vector3(0, 1.5, 0), c + Vector3(cos(a), 0.0, sin(a)) * 9.0 + Vector3(0, 2.2, 0))
+				look = cpos + Vector3(0, 1.2, 0)
+			fov = 62.0
+		"dom_front":
+			var ahead := poly_at(rpath, rs + 20.0)
+			var fw2 := poly_dir(rpath, rs)
+			var n2 := Vector3(-fw2.y, 0.0, fw2.x)
+			var base := Vector3(ahead.x, 0.0, ahead.y)
+			pos = pulled(base + Vector3(0, 1.0, 0), base + n2 * 4.0 + Vector3(0, 0.8, 0)) + jit
+			look = m.pos + Vector3(0, 2.4, 0)
+			fov = 60.0
+		"dom_side":
+			var fw3 := poly_dir(rpath, rs)
+			var n3 := Vector3(-fw3.y, 0.0, fw3.x)
+			var p3 := poly_at(rpath, rs + 3.0)
+			var base3 := Vector3(p3.x, 0.0, p3.y)
+			pos = pulled(base3 + Vector3(0, 1.4, 0), base3 - n3 * 12.0 + Vector3(0, 1.4, 0)) + jit
+			look = base3 + Vector3(0, 1.8, 0)
+			fov = 64.0
+		"dom_high":
+			pos = m.pos - fwd * 6.0 + right * 2.0 + Vector3(0, 6.5, 0) + jit
+			look = m.pos + fwd * 14.0 + Vector3(0, 1.0, 0)
+			fov = 62.0
+		"feet":
+			pos = pulled(m.pos + Vector3(0, 0.4, 0), m.pos + right * 4.5 + fwd * 3.0 + Vector3(0, 0.35, 0)) + jit
+			look = m.pos + Vector3(0, 1.2, 0)
+			fov = 60.0
+		"hide_pov":
+			var hp := Vector3(hide.x, g.pl.pos.y, hide.y)
+			var to := (Vector3(m.pos.x, hp.y, m.pos.z) - hp).normalized()
+			var side := Vector3(-to.z, 0.0, to.x)
+			pos = pulled(hp + Vector3(0, 0.9, 0), hp - to * 1.6 + side * 0.5 + Vector3(0, 1.05, 0)) + jit * 0.5
+			look = rhead.lerp(hp + Vector3(0, 0.8, 0), 0.15)
+			fov = 60.0
+		"rex_close":
+			pos = pulled(rhead, rhead + right * 3.8 + fwd * 1.6 + Vector3(0, -0.4, 0)) + jit * 0.5
+			look = rhead
+			fov = 56.0
+		"wide":
+			var hp2 := Vector3(hide.x, 0.0, hide.y)
+			var mid := hp2.lerp(m.pos, 0.5)
+			var dd := (m.pos - hp2).normalized()
+			var side2 := Vector3(-dd.z, 0.0, dd.x)
+			pos = pulled(mid + Vector3(0, 2.0, 0), mid + side2 * 13.0 + Vector3(0, 2.4, 0)) + jit * 0.5
+			look = mid + Vector3(0, 1.6, 0)
+			fov = 62.0
+		_:
+			return
+	# never inside the creature, never under the street
+	pos = g.pl._out_of_rex(pos, (look - pos).normalized())
+	pos.y = maxf(pos.y, g.world.ground_at(pos.x, pos.z, 0.0) + 0.25)
+	if pos.distance_to(look) < 0.5:
+		return
+	var c: Camera3D = g.cam
+	c.position = pos
+	c.fov = fov
+	c.look_at(look)

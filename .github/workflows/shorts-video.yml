@@ -1,21 +1,21 @@
 name: Render Shorts video
 
-# Renders vertical (1080x1920) daylight action Shorts of the Godot Lost City on a GitHub server: Godot's movie
-# maker plays a scripted shot (godot/tests/short.gd) on a software renderer, then ffmpeg adds captions
-# (tools/shorts/compose.sh). One video per seed, side by side, so the best one can be picked.
-# The videos and a contact sheet of each are in the run's Artifacts (short-seed-N), visible to people signed in to GitHub.
+# Renders vertical (1080x1920) satisfying action Shorts of the Godot Lost City on a GitHub server, on a bright dry
+# day: Godot's movie maker plays a scripted recipe (godot/tests/short.gd) on a software renderer, then
+# tools/shorts/compose.py lays the sound design and a hook caption on it. Every recipe x seed renders side by side.
+# The videos and a contact sheet of each are in the run's Artifacts and on the public "shorts-latest" release.
 on:
   push:
     branches: [shorts-video]
     paths: ["godot/tests/short.gd", "tools/shorts/**", ".github/workflows/shorts-video.yml"]
   workflow_dispatch:
     inputs:
-      shot:
-        description: "carchase, chase or freeze"
-        default: "carchase"
+      recipes:
+        description: "Recipes to render, as a JSON list (flip, ram, domino, nearmiss, freeze)"
+        default: '["flip","ram","domino","nearmiss","freeze"]'
       seeds:
-        description: "Seeds to render, as a JSON list (each changes where and how it plays out)"
-        default: "[1,2,3]"
+        description: "Seeds to render, as a JSON list (each puts it somewhere else in the city)"
+        default: "[1,2]"
 
 permissions:
   contents: read
@@ -26,13 +26,15 @@ env:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        seed: ${{ fromJSON(github.event.inputs.seeds || '[1,2,3]') }}
+        recipe: ${{ fromJSON(github.event.inputs.recipes || '["flip","ram","domino","nearmiss","freeze"]') }}
+        seed: ${{ fromJSON(github.event.inputs.seeds || '[1,2]') }}
     env:
-      SHOT: ${{ github.event.inputs.shot || 'carchase' }}
+      RECIPE: ${{ matrix.recipe }}
+      SEED: ${{ matrix.seed }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,54 +71,65 @@ jobs:
         run: |
           out=$(~/godot/godot --headless --path . --check-only -s res://tests/short.gd 2>&1) || true
           echo "$out"
-          if echo "$out" | grep -q "SCRIPT ERROR"; then exit 1; fi
+          if echo "$out" | grep -q "SCRIPT ERROR"; then
+            echo "::error title=director script::$(echo "$out" | grep -A3 'SCRIPT ERROR' | head -8 | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')"
+            exit 1
+          fi
 
       - name: Record the shot
         run: |
           mkdir -p out
           # this CI copy of the project is portrait: its landscape window override would beat --resolution
           sed -i '/window\/size\/window_\(width\|height\)_override/d; s/viewport_width=844/viewport_width=1080/; s/viewport_height=390/viewport_height=1920/' godot/project.godot
-          grep -n "window/size" godot/project.godot
           set -o pipefail
           start=$(date +%s)
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
             --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
-            -s res://tests/short.gd -- --mode=$SHOT --seed=${{ matrix.seed }} --len=26 --bite=14 2>&1 | tee godot.log
+            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED 2>&1 | tee godot.log
           echo "recording took $(( $(date +%s) - start )) s"
           test -s out/clip.avi
-          # what happened, as annotations on the run page: the clip's length, the second-by-second trace, and any errors
+          # what happened, as annotations on the run page: the clip, the second-by-second trace, and any errors
           info=$(ffprobe -v error -show_entries format=duration,size:stream=width,height -of compact=p=0 out/clip.avi | tr '\n' ' ')
-          echo "::notice title=clip seed ${{ matrix.seed }}::${info}"
-          trace=$(grep -E '^(t=|shot )' godot.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
-          echo "::notice title=trace seed ${{ matrix.seed }}::${trace}"
-          errs=$(grep -E 'ERROR|WARNING' godot.log | head -12 | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
-          if [ -n "$errs" ]; then echo "::warning title=godot errors seed ${{ matrix.seed }}::${errs}"; fi
+          echo "::notice title=clip $RECIPE seed $SEED::${info}"
+          trace=$(grep -E '^(t=|shot |EVENT )' godot.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
+          echo "::notice title=trace $RECIPE seed $SEED::${trace}"
+          errs=$(grep -E 'SCRIPT ERROR|ERROR|WARNING' godot.log | grep -v -E 'ObjectDB instances leaked|resources still in use' | head -12 | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
+          if [ -n "$errs" ]; then echo "::warning title=godot errors $RECIPE seed $SEED::${errs}"; fi
 
-      - name: Add captions
+      - name: Sound design and captions
         run: |
-          # captions are timed from what actually happened in the clip (EVENT lines of the director)
-          ev() { grep -m1 "^EVENT $1 " godot.log | awk '{print $3}' || true; }
-          add() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.1f", a + b }'; }
-          bite=$(ev bite); tumble=$(ev tumble); end=$(ev end); end=${end:-26}
-          caps=("IT IS RIGHT BEHIND YOU|0.3|2.4")
-          if [ -n "$bite" ]; then
-            if awk -v b="$bite" 'BEGIN { exit !(b > 5) }'; then caps+=("FLOOR IT|2.7|$(add "$bite" -0.5)"); fi
-            caps+=("IT GOT THE CAR|$(add "$bite" -0.1)|$(add "$bite" 1.8)")
-          fi
-          if [ -n "$tumble" ]; then caps+=("IT THREW THE CAR|$(add "$tumble" 0)|$(add "$tumble" 1.7)"); fi
-          caps+=("DID HE MAKE IT?|$(add "$end" -0.4)|$(add "$end" 1.9)")
-          printf '%s\n' "${caps[@]}"
-          bash tools/shorts/compose.sh out/short.mp4 out/clip.avi "${caps[@]}"
-          mv out/short.mp4 out/${SHOT}_seed${{ matrix.seed }}.mp4
-          mv out/short_sheet.png out/${SHOT}_seed${{ matrix.seed }}_sheet.png
-          echo "::notice title=final video seed ${{ matrix.seed }}::$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/${SHOT}_seed${{ matrix.seed }}.mp4) seconds"
+          python3 tools/shorts/compose.py --clip out/clip.avi --log godot.log --recipe $RECIPE --out out/${RECIPE}_seed${SEED}.mp4
+          echo "::notice title=final $RECIPE seed $SEED::$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/${RECIPE}_seed${SEED}.mp4) seconds"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: short-seed-${{ matrix.seed }}
+          name: short-${{ matrix.recipe }}-${{ matrix.seed }}
           path: |
             out/*.mp4
             out/*_sheet.png
           retention-days: 14
           if-no-files-found: ignore
+
+  publish:
+    needs: render
+    if: always() && needs.render.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: short-*
+          path: out
+          merge-multiple: true
+
+      - name: Publish on the shorts-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la out
+          gh release delete shorts-latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          gh release create shorts-latest out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Shorts renders (latest)" \
+            --notes "Rendered by the Render Shorts video workflow from ${GITHUB_SHA::7}: one video per recipe and seed, each with a contact sheet (one frame a second)."

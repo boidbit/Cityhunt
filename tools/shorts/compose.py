@@ -107,7 +107,8 @@ def main():
     filt = []
     mix = ["[ga]", "[amb]"]
     filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=1.0[ga]" % game_in)
-    filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:%.2f,volume=0.2[amb]" % (wind_in, dur))
+    # (atrim by name: its second positional option is another start, not the end)
+    filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,volume=0.2[amb]" % (wind_in, dur))
     idx = wind_in + 1
     count = {}
     for name, t in events:
@@ -128,11 +129,11 @@ def main():
             mix.append("[s%d]" % idx)
             idx += 1
     # the heartbeat, from when it comes near to when it has gone
-    if "heart_on" in ev:
-        on = ev["heart_on"]
-        off = ev.get("heart_off", dur)
+    on = ev.get("heart_on", dur)
+    off = ev.get("heart_off", dur)
+    if off - on > 1.0:
         inputs += ["-stream_loop", "-1", "-i", snd("heart")]
-        filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:%.2f,asetpts=PTS-STARTPTS,"
+        filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,asetpts=PTS-STARTPTS,"
                     "volume=0.9,afade=t=out:st=%.2f:d=0.8,adelay=%d:all=1[s%d]"
                     % (idx, off - on, max(off - on - 0.8, 0), int(on * 1000), idx))
         mix.append("[s%d]" % idx)

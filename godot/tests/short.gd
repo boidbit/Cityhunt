@@ -12,6 +12,9 @@
 extends SceneTree
 
 const FPS := 30.0
+const CRUISE := 13.0      # carchase: how fast the car drives on the straight (m/s)
+const GAP := 13.0         # carchase: how far the creature runs behind the car (m, centre to centre)
+const GAP_BITE := 8.0     # ... and when it bites: its jaws are then just over the boot
 const CUTS := ["front_low", "dash_back", "side_low", "dash_back", "rex_pov"]
 
 var g: Game
@@ -31,7 +34,8 @@ var flared := false
 var broke := false
 var car: Variant = null
 var bite_t := -99.0      # when the first bite landed
-var events := {}         # name -> second it first happened (bite, tumble, caught, end)
+var track: Array[Vector2] = []   # carchase: where the car has been, oldest first
+var events := {}        # name -> second it first happened (bite, tumble, caught, end)
 var unpaused := 0       # how many times the game paused itself and was set going again
 var trace: Array = []
 var trace_at := 0.0
@@ -238,9 +242,12 @@ func place_carchase(p: Vector2) -> void:
 	car.yaw = -dir.angle()
 	g.pl.pos = Vector3(cp.x, g.world.ground_at(cp.x, cp.y, 0.0), cp.y)
 	g.enter_car(car)
-	rex_behind(cp, dir, 16.0)
+	rex_behind(cp, dir, GAP)
 	g.mon.start_chase()
 	g.mon.last_seen_t = g.time
+	# the track behind the car to start with: a straight line back
+	for k in range(100, -1, -1):
+		track.append(cp - dir * (k * 0.4))
 
 func place_freeze(p: Vector2) -> void:
 	var q := far_spot(p, 30.0, 48.0)
@@ -315,14 +322,10 @@ func carchase(t: float, dt: float) -> void:
 	var want := atan2(wp[0].y - cp.y, wp[0].x - cp.x)
 	var err := U.ang_diff(atan2(fv.y, fv.x), want)
 	var steer := clampf(err * 2.2, -1.0, 1.0)
-	var gap := cp.distance_to(Vector2(g.mon.pos.x, g.mon.pos.z))
-	var goal := 5.0 if bite_at >= 0.0 and t >= bite_at else 14.0
-	# Hold the gap: faster than the creature when it is closer than the goal, slower when it has dropped back.
-	# Slow for the bends too, or it ends up in a wall (and the creature catches up).
-	var rex_sp := maxf(g.mon.speed, 6.0)
-	var des := clampf(rex_sp + (goal - gap) * 0.8, 4.0, 22.0)
-	des = maxf(des * (1.0 - 0.6 * minf(1.0, absf(err) / 0.9)), 3.5)
-	var thr := clampf((des - c.speed) * 0.5, -0.5, 1.0)
+	# A steady cruise, slowed for the bends (or it ends up in a wall). The creature is not left to its own
+	# pathfinding: rex_follow() keeps it a set distance behind along the car's own track.
+	var des := maxf(CRUISE * (1.0 - 0.6 * minf(1.0, absf(err) / 0.9)), 4.0)
+	var thr := clampf((des - c.speed) * 0.6, -0.5, 1.0)
 	# wedged against something: back out (not while it is recovering from a bite)
 	var recovering: bool = bite_t >= 0.0 and t - bite_t < 2.5
 	if absf(c.speed) < 1.0 and t > 2.0 and not recovering:
@@ -338,6 +341,48 @@ func carchase(t: float, dt: float) -> void:
 		steer = -steer
 	inp.jy = thr
 	inp.jx = steer
+
+## How far behind the car the creature runs at time t: GAP, closing to GAP_BITE over the 2 s before bite_at.
+func gap_at(t: float) -> float:
+	if bite_at < 0.0 or t < bite_at - 2.0:
+		return GAP
+	return lerpf(GAP, GAP_BITE, clampf((t - (bite_at - 2.0)) / 2.0, 0.0, 1.0))
+
+## The spot d metres back along the car's track.
+func point_behind(d: float) -> Vector2:
+	var left := d
+	var prev: Vector2 = car.pos
+	for i in range(track.size() - 1, -1, -1):
+		var seg := prev.distance_to(track[i])
+		if seg >= left and seg > 0.0:
+			return prev.lerp(track[i], left / seg)
+		left -= seg
+		prev = track[i]
+	return prev
+
+## Puts the creature on the car's track, GAP behind it, running along it. Once he is out of the car it is
+## the creature's own again. Runs after the game's own update, with the camera.
+func rex_follow() -> void:
+	if shot != "carchase" or car == null or not g.pl.driving or car.state != "driven":
+		return
+	var cp: Vector2 = car.pos
+	if track.is_empty() or track[-1].distance_to(cp) > 0.4:
+		track.append(cp)
+		if track.size() > 500:
+			track.remove_at(0)
+	var t := (f - started) / FPS
+	var gap := gap_at(t)
+	var p := point_behind(gap)
+	var h := p - point_behind(gap + 3.0)
+	var m: Monster = g.mon
+	m.pos = Vector3(p.x, 0.0, p.y)
+	if h.length() > 0.01:
+		m.yaw = atan2(h.x, h.y)
+	m.speed = clampf(absf(car.speed) + 3.0, 6.0, 11.0)
+	m.last_seen_t = g.time
+	m.last_known = g.pl.pos
+	m.actor.position = Vector3(p.x, g.world.ground_at(p.x, p.y, 0.0), p.y)
+	m.actor.rotation.y = m.yaw
 
 func freeze(t: float, dt: float) -> void:
 	var inp: Dictionary = g.hud.input
@@ -423,6 +468,7 @@ func pulled(from: Vector3, want: Vector3) -> Vector3:
 func camera() -> void:
 	if g == null or started < 0:
 		return
+	rex_follow()
 	var t := (f - started) / FPS
 	var mode := cut(t)
 	if mode == "game":

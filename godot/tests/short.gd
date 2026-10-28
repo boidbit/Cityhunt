@@ -1,12 +1,13 @@
 ## Shorts director: plays one scripted action shot for a vertical video, in daylight, with cinematic cuts and no HUD.
 ## Meant to be recorded with Godot's movie maker (see tools/shorts and .github/workflows/shorts-video.yml):
-##   godot --path godot --resolution 1080x1920 --fixed-fps 30 --write-movie out/clip.avi -s res://tests/short.gd -- --shot=carchase --seed=3 --len=26
-## --shot=carchase  you drive, the T-Rex right behind; it bites the car, then throws it over (close-up chase)
-## --shot=chase     on foot, it charges from behind and you sprint away along the streets
-## --shot=freeze    on foot, it walks up to where you stand still; the beat breaks and it charges
+##   godot --path godot --resolution 1080x1920 --fixed-fps 30 --write-movie out/clip.avi -s res://tests/short.gd -- --mode=carchase --seed=3 --len=26
+## --mode=carchase  you drive, the T-Rex right behind; it bites the car, then throws it over (close-up chase)
+## --mode=chase     on foot, it charges from behind and you sprint away along the streets
+## --mode=freeze    on foot, it walks up to where you stand still; the beat breaks and it charges
 ## --bite=SECONDS   carchase: when it is let catch up and bite (-1: never)
 ## --flare=4.5      chase: throw the flare at that second (the creature is drawn to it)
 ## --len=SECONDS    how long the shot lasts, then the program quits
+## Do not call a flag --shot, --frames, --day, --play, --loc or --stats: the game itself reads those (--shot=x quits it after 60 frames).
 ## Every half second a line of trace is printed, and at the end all of it as one ::notice for the Actions page.
 extends SceneTree
 
@@ -48,7 +49,7 @@ class Rig extends Node:
 
 func _initialize() -> void:
 	for a in OS.get_cmdline_user_args():
-		if a.begins_with("--shot="):
+		if a.begins_with("--mode="):
 			shot = a.substr(7)
 		elif a.begins_with("--seed="):
 			seed_n = int(a.substr(7))

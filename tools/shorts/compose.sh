@@ -32,5 +32,5 @@ fi
 ls -la "$out"
 
 sheet="${out%.mp4}_sheet.png"
-ffmpeg -y -i "$out" -vf "fps=1,scale=216:384,tile=10x3" -frames:v 1 "$sheet"
+ffmpeg -y -i "$out" -vf "fps=1,scale=216:384,tile=10x3" -frames:v 1 -update 1 "$sheet"
 ls -la "$sheet"

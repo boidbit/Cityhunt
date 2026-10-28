@@ -74,11 +74,14 @@ jobs:
       - name: Record the shot
         run: |
           mkdir -p out
+          # this CI copy of the project is portrait: its landscape window override would beat --resolution
+          sed -i '/window\/size\/window_\(width\|height\)_override/d; s/viewport_width=844/viewport_width=1080/; s/viewport_height=390/viewport_height=1920/' godot/project.godot
+          grep -n "window/size" godot/project.godot
           set -o pipefail
           start=$(date +%s)
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
             --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
-            -s res://tests/short.gd -- --shot=$SHOT --seed=${{ matrix.seed }} --len=26 --bite=12 2>&1 | tee godot.log
+            -s res://tests/short.gd -- --mode=$SHOT --seed=${{ matrix.seed }} --len=26 --bite=12 2>&1 | tee godot.log
           echo "recording took $(( $(date +%s) - start )) s"
           test -s out/clip.avi
           # what happened, as annotations on the run page: the clip's length, the second-by-second trace, and any errors

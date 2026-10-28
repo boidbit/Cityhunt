@@ -74,7 +74,10 @@ jobs:
       RECIPE: ${{ matrix.recipe }}
       SEED: ${{ matrix.seed }}
     steps:
+      # the director and the sound mix live on the shorts-video branch, whichever branch the run was started from
       - uses: actions/checkout@v4
+        with:
+          ref: shorts-video
 
       - name: Install the software GPU, a virtual screen and ffmpeg
         run: |
@@ -170,7 +173,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ls -la out
+          ls -la out || true
+          if ! ls out/*.mp4 >/dev/null 2>&1; then
+            echo "::warning title=publish::No video was made, nothing to publish (see the render jobs)"
+            exit 0
+          fi
           gh release delete shorts-latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
           gh release create shorts-latest out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
             --title "Shorts renders (latest)" \

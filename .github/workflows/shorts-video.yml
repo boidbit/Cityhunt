@@ -2,22 +2,26 @@ name: Render Shorts video
 
 # Renders vertical (1080x1920) satisfying action Shorts of the Godot Lost City on a GitHub server, on a bright dry
 # day: Godot's movie maker plays a scripted recipe (godot/tests/short.gd) on a software renderer, then
-# tools/shorts/compose.py lays the sound design and a hook caption on it. Every recipe x seed renders side by side.
+# tools/shorts/compose.py lays the sound design and a hook caption on it. The videos render side by side.
 # The videos and a contact sheet of each are in the run's Artifacts and on the public "shorts-latest" release.
 # Only run by hand (Actions tab, Run workflow), never on a push.
 on:
   workflow_dispatch:
     inputs:
       recipe:
-        description: "Which Short to make (all = every recipe)"
+        description: "Which Short: one recipe, all of them, or a random recipe for each video"
         type: choice
-        default: all
-        options: [all, flip, ram, domino, nearmiss, freeze]
-      seeds:
-        description: "Which seeds (each puts it somewhere else in the city)"
+        default: random
+        options: [random, all, flip, ram, domino, nearmiss, freeze]
+      count:
+        description: "How many videos (with 'all': how many of each recipe)"
         type: choice
         default: "1"
-        options: ["1", "1,2", "1,2,3", "2", "3", "4", "5"]
+        options: ["1", "2", "3", "4", "5", "10"]
+      seed:
+        description: "First seed, to remake a video you liked (leave empty for new random places)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -26,14 +30,46 @@ env:
   GODOT_VERSION: 4.6.2
 
 jobs:
+  # Works out which videos to make (recipe and seed for each) from the choices above.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          RECIPE: ${{ inputs.recipe }}
+          COUNT: ${{ inputs.count }}
+          SEED: ${{ inputs.seed }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, random
+          recipes = ["flip", "ram", "domino", "nearmiss", "freeze"]
+          pick, n, s = os.environ["RECIPE"], int(os.environ["COUNT"]), os.environ.get("SEED", "").strip()
+          base = int(s) if s.isdigit() else random.randint(1, 9000)
+          jobs = []
+          for k in range(n):
+              if pick == "all":
+                  jobs += [{"recipe": r, "seed": base + k} for r in recipes]
+              elif pick == "random":
+                  jobs.append({"recipe": random.choice(recipes), "seed": base + k})
+              else:
+                  jobs.append({"recipe": pick, "seed": base + k})
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("matrix=" + json.dumps({"include": jobs}) + "\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### Videos to make: %d\n\n| recipe | seed |\n|---|---|\n" % len(jobs))
+              f.writelines("| %s | %d |\n" % (j["recipe"], j["seed"]) for j in jobs)
+          print(json.dumps(jobs))
+          EOF
+
   render:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        recipe: ${{ fromJSON(inputs.recipe == 'all' && '["flip","ram","domino","nearmiss","freeze"]' || format('["{0}"]', inputs.recipe)) }}
-        seed: ${{ fromJSON(format('[{0}]', inputs.seeds)) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       RECIPE: ${{ matrix.recipe }}
       SEED: ${{ matrix.seed }}

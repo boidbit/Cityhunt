@@ -1,0 +1,177 @@
+name: Render Shorts video
+
+# Renders vertical (1080x1920) satisfying action Shorts of the Godot Lost City on a GitHub server, on a bright dry
+# day: Godot's movie maker plays a scripted recipe (godot/tests/short.gd) on a software renderer, then
+# tools/shorts/compose.py lays the sound design and a hook caption on it. The videos render side by side.
+# The videos and a contact sheet of each are in the run's Artifacts and on the public "shorts-latest" release.
+# Only run by hand (Actions tab, Run workflow), never on a push.
+on:
+  workflow_dispatch:
+    inputs:
+      recipe:
+        description: "Which Short: one recipe, all of them, or a random recipe for each video"
+        type: choice
+        default: random
+        options: [random, all, flip, ram, domino, nearmiss, freeze]
+      count:
+        description: "How many videos (with 'all': how many of each recipe)"
+        type: choice
+        default: "1"
+        options: ["1", "2", "3", "4", "5", "10"]
+      seed:
+        description: "First seed, to remake a video you liked (leave empty for new random places)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  GODOT_VERSION: 4.6.2
+
+jobs:
+  # Works out which videos to make (recipe and seed for each) from the choices above.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          RECIPE: ${{ inputs.recipe }}
+          COUNT: ${{ inputs.count }}
+          SEED: ${{ inputs.seed }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, random
+          recipes = ["flip", "ram", "domino", "nearmiss", "freeze"]
+          pick, n, s = os.environ["RECIPE"], int(os.environ["COUNT"]), os.environ.get("SEED", "").strip()
+          base = int(s) if s.isdigit() else random.randint(1, 9000)
+          jobs = []
+          for k in range(n):
+              if pick == "all":
+                  jobs += [{"recipe": r, "seed": base + k} for r in recipes]
+              elif pick == "random":
+                  jobs.append({"recipe": random.choice(recipes), "seed": base + k})
+              else:
+                  jobs.append({"recipe": pick, "seed": base + k})
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("matrix=" + json.dumps({"include": jobs}) + "\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("### Videos to make: %d\n\n| recipe | seed |\n|---|---|\n" % len(jobs))
+              f.writelines("| %s | %d |\n" % (j["recipe"], j["seed"]) for j in jobs)
+          print(json.dumps(jobs))
+          EOF
+
+  render:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      RECIPE: ${{ matrix.recipe }}
+      SEED: ${{ matrix.seed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the software GPU, a virtual screen and ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1 ffmpeg \
+            libxcursor1 libxinerama1 libxi6 libxrandr2 libgl1 libpulse0
+          sudo apt-get install -y libasound2t64 || sudo apt-get install -y libasound2
+
+      - name: Cache Godot
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-editor
+
+      - name: Download Godot
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          mkdir -p ~/godot
+          curl -fsSL --retry 3 "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip" -o godot.zip
+          unzip -q godot.zip -d ~/godot
+          mv ~/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 ~/godot/godot
+          rm godot.zip
+
+      - name: Import the project
+        working-directory: godot
+        run: ~/godot/godot --headless --path . --import
+
+      - name: Check the director script
+        working-directory: godot
+        run: |
+          out=$(~/godot/godot --headless --path . --check-only -s res://tests/short.gd 2>&1) || true
+          echo "$out"
+          if echo "$out" | grep -q "SCRIPT ERROR"; then
+            echo "::error title=director script::$(echo "$out" | grep -A3 'SCRIPT ERROR' | head -8 | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')"
+            exit 1
+          fi
+
+      - name: Record the shot
+        run: |
+          mkdir -p out
+          # this CI copy of the project is portrait: its landscape window override would beat --resolution
+          sed -i '/window\/size\/window_\(width\|height\)_override/d; s/viewport_width=844/viewport_width=1080/; s/viewport_height=390/viewport_height=1920/' godot/project.godot
+          set -o pipefail
+          start=$(date +%s)
+          xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
+            --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
+            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED 2>&1 | tee godot.log
+          echo "recording took $(( $(date +%s) - start )) s"
+          test -s out/clip.avi
+          # what happened, as annotations on the run page: the clip, the second-by-second trace, and any errors
+          info=$(ffprobe -v error -show_entries format=duration,size:stream=width,height -of compact=p=0 out/clip.avi | tr '\n' ' ')
+          echo "::notice title=clip $RECIPE seed $SEED::${info}"
+          trace=$(grep -E '^(t=|shot |EVENT )' godot.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
+          echo "::notice title=trace $RECIPE seed $SEED::${trace}"
+          errs=$(grep -E 'SCRIPT ERROR|ERROR|WARNING' godot.log | grep -v -E 'ObjectDB instances leaked|resources still in use' | head -12 | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')
+          if [ -n "$errs" ]; then echo "::warning title=godot errors $RECIPE seed $SEED::${errs}"; fi
+
+      - name: Sound design and captions
+        run: |
+          set -o pipefail
+          if ! python3 tools/shorts/compose.py --clip out/clip.avi --log godot.log --recipe $RECIPE --out out/${RECIPE}_seed${SEED}.mp4 2>&1 | tee compose.log; then
+            echo "::error title=compose $RECIPE seed $SEED::$(tail -15 compose.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')"
+            exit 1
+          fi
+          echo "::notice title=final $RECIPE seed $SEED::$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/${RECIPE}_seed${SEED}.mp4) seconds"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: short-${{ matrix.recipe }}-${{ matrix.seed }}
+          path: |
+            out/*.mp4
+            out/*_sheet.png
+          retention-days: 14
+          if-no-files-found: ignore
+
+  publish:
+    needs: render
+    if: always() && needs.render.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: short-*
+          path: out
+          merge-multiple: true
+
+      - name: Publish on the shorts-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la out
+          gh release delete shorts-latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          gh release create shorts-latest out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Shorts renders (latest)" \
+            --notes "Rendered by the Render Shorts video workflow from ${GITHUB_SHA::7}: one video per recipe and seed, each with a contact sheet (one frame a second)."

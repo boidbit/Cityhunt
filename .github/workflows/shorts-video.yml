@@ -5,6 +5,9 @@ name: Render Shorts video
 # joins them with captions (tools/shorts/compose.sh). Run it by hand from the Actions tab; the finished
 # video is in the run's Artifacts as short-final, the raw clips as short-clips, a test still as probe.
 on:
+  push:
+    branches: [shorts-video]
+    paths: ["godot/tests/short.gd", "tools/shorts/**", ".github/workflows/shorts-video.yml"]
   workflow_dispatch:
     inputs:
       seed_freeze:
@@ -77,7 +80,7 @@ jobs:
           start=$(date +%s)
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
             --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/freeze.avi" \
-            -s res://tests/short.gd -- --shot=freeze --seed=${{ inputs.seed_freeze }} --len=14 --beat=7
+            -s res://tests/short.gd -- --shot=freeze --seed=${{ inputs.seed_freeze || '3' }} --len=14 --beat=7
           echo "freeze shot took $(( $(date +%s) - start )) s"
           test -s out/freeze.avi
 
@@ -86,7 +89,7 @@ jobs:
           start=$(date +%s)
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
             --audio-driver Dummy --resolution 1080x1920 --fixed-fps 30 --write-movie "$GITHUB_WORKSPACE/out/chase.avi" \
-            -s res://tests/short.gd -- --shot=chase --seed=${{ inputs.seed_chase }} --len=14 --flare=4.5
+            -s res://tests/short.gd -- --shot=chase --seed=${{ inputs.seed_chase || '5' }} --len=14 --flare=4.5
           echo "chase shot took $(( $(date +%s) - start )) s"
           test -s out/chase.avi
 

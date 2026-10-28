@@ -14,13 +14,15 @@
 ## effects and captions on those. Times are seconds of video, which run on while the game is slowed down.
 extends SceneTree
 
-const FPS := 30.0
+const FX := preload("res://tests/short_fx.gd")
 const MAX_LEN := 34.0
 const LUNGES := [3.4, 7.0, 10.6]   # nearmiss: when its jaws snap at the boot
 
 var g: Game
+var fx: FX
 var recipe := "flip"
 var seed_n := 1
+var fps := 30.0          # frames recorded a second (--fps, the same as Godot's --fixed-fps); more blur into one
 var f := 0
 var started := -1
 var done_at := -1.0
@@ -82,6 +84,8 @@ func _initialize() -> void:
 			recipe = a.substr(7)
 		elif a.begins_with("--seed="):
 			seed_n = int(a.substr(7))
+		elif a.begins_with("--fps="):
+			fps = float(a.substr(6))
 	root.add_child(load("res://scenes/main.tscn").instantiate())
 	rig = Rig.new(self)
 	root.add_child(rig)
@@ -140,7 +144,7 @@ func _process(dt: float) -> bool:
 	return false
 
 func now() -> float:
-	return (f - started) / FPS
+	return (f - started) / fps
 
 func after_game(dt: float) -> void:
 	if g == null or started < 0:
@@ -148,6 +152,7 @@ func after_game(dt: float) -> void:
 	place_rex()
 	if recipe == "domino" or (recipe == "flip" and events.has("flip")):
 		g.pl.actor.visible = false
+	fx.update(dt)
 	camera(now(), dt)
 
 ## Notes when something happened, once.
@@ -158,6 +163,26 @@ func mark(what: String, t: float) -> void:
 	var line := "EVENT %s %.2f" % [what, t]
 	trace.append(line)
 	print(line)
+	react(what)
+
+## Sparks, glass, debris and dust where the hits land.
+func react(what: String) -> void:
+	if car == null:
+		return
+	var fv: Vector2 = g.veh.forward(car)
+	var cf := Vector3(fv.x, 0.0, fv.y)
+	var cpos := Vector3(car.pos.x, car.y, car.pos.y)
+	var hl: float = car.size.x * 0.5
+	if what.begins_with("bite"):
+		fx.burst("bite", cpos - cf * hl + Vector3(0, 1.0, 0), Vector3.UP - cf)
+	elif what == "flip":
+		fx.burst("impact", cpos + Vector3(0, 1.0, 0), Vector3.UP)
+	elif what == "land":
+		fx.burst("land", cpos, Vector3.UP)
+	elif what == "ram":
+		var m := g.mon
+		var hit := (cpos + cf * hl).lerp(m.pos, 0.3) + Vector3(0, 1.0, 0)
+		fx.burst("impact", hit, Vector3.UP * 0.8 - cf)
 
 func end_after(t: float, sec: float) -> void:
 	if done_at < 0.0:
@@ -203,6 +228,7 @@ func setup() -> void:
 	g.cam.keep_aspect = Camera3D.KEEP_HEIGHT
 	bright()
 	solid_cars()
+	fx = FX.new(g)
 	var p := Vector2(g.pl.pos.x, g.pl.pos.z)
 	match recipe:
 		"ram":
@@ -449,6 +475,7 @@ func point_behind(d: float) -> Vector2:
 func setup_chase(p: Vector2) -> void:
 	pick_car(p)
 	var dir := get_in()
+	fx.rig_wheels(car)
 	var cp: Vector2 = car.pos
 	var at := cp - dir * gap
 	g.mon.pos = Vector3(at.x, 0.0, at.y)
@@ -550,6 +577,7 @@ func step_nearmiss(t: float, dt: float) -> void:
 func setup_ram(p: Vector2) -> void:
 	pick_car(p)
 	get_in()
+	fx.rig_wheels(car)
 	cruise = 21.0
 	rpath = [car.pos] + wp.duplicate()
 	var L := poly_len(rpath)
@@ -708,6 +736,8 @@ func step_domino(t: float) -> void:
 			c["_tossed"] = true
 			tossed += 1
 			mark("toss_%d" % tossed, t)
+			var thrown: Vector2 = ((c.pos as Vector2) - p).normalized()
+			fx.burst("toss", Vector3(c.pos.x, 1.0, c.pos.y), Vector3(thrown.x, 1.0, thrown.y))
 			if tossed == 1:
 				slow(t, 1.3, 0.4)
 			elif tossed == lined.size() - 1 and slow_n < 2:

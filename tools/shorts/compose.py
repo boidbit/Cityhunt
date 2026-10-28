@@ -203,7 +203,15 @@ def main():
             if name.startswith("toss_"):
                 n += 1
                 cap(str(n), t, min(t + 0.9, dur), 260, "h*0.12")
-    vf = "fps=30,scale=1080:1920:flags=lanczos,setsar=1" + "".join("," + c for c in caps)
+    # motion blur: the clip is recorded faster than 30 fps; each output frame is the average of the frames
+    # over three quarters of its time (a 270 degree shutter), the way a film camera smears fast motion
+    rate = probe(a.clip, "stream=r_frame_rate", "v").split("\n")[0]
+    num, _, den = rate.partition("/")
+    in_fps = float(num) / float(den or 1) if num else 30.0
+    blend = max(1, int(round(in_fps / 30.0 * 0.75)))
+    blur = "tmix=frames=%d," % blend if blend > 1 else ""
+    print("clip at %.0f fps, blending %d frames into each" % (in_fps, blend))
+    vf = blur + "fps=30,scale=1080:1920:flags=lanczos,setsar=1" + "".join("," + c for c in caps)
     filt.append("[0:v]%s[v]" % vf)
 
     run(["ffmpeg", "-y", "-v", "warning"] + inputs + ["-filter_complex", ";".join(filt), "-map", "[v]", "-map", "[aout]",

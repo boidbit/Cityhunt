@@ -521,7 +521,7 @@ func step_ram(t: float, dt: float) -> void:
 			hold_until = t + 3.0
 			rev_t = 1.0
 			cruise = 16.0
-			end_after(t, 5.5)
+			end_after(t, 6.5)
 		if t > 16.0:
 			mark("miss", t)
 			end_after(t, 0.5)
@@ -575,12 +575,12 @@ func setup_domino() -> void:
 	var free: Array = g.veh.cars.filter(func(c): return c.state == "parked")
 	var mid := a.lerp(b, 0.5)
 	free.sort_custom(func(x, y): return (x.pos as Vector2).distance_to(mid) < (y.pos as Vector2).distance_to(mid))
-	var count := clampi(int((L - 12.0) / 7.5), 3, 6)
+	var count := clampi(int((L - 8.0) / 5.0), 4, 7)
 	for k in count:
 		if k >= free.size():
 			break
 		var c: Dictionary = free[k]
-		var along := 12.0 + k * (L - 14.0) / maxf(count - 1, 1)
+		var along := 10.0 + k * (L - 10.0) / maxf(count - 1, 1)
 		var side := (1.0 if k % 2 == 0 else -1.0) * randf_range(0.6, 1.4)
 		var p := a + u * along + n * side
 		c.pos = p
@@ -691,11 +691,12 @@ func setup_freeze() -> void:
 	stop_s = poly_closest(rpath, hide)
 	while stop_s > 0.0 and poly_at(rpath, stop_s).distance_to(hide) < 5.5:
 		stop_s -= 0.5
-	rs = 0.0
+	# it starts close enough to be there in seconds, not a long walk away
+	rs = maxf(stop_s - 18.0, 0.0)
 	rdir = 1.0
 	rspeed = 0.0
 	walk = true
-	var at := poly_at(rpath, 0.0)
+	var at := poly_at(rpath, rs)
 	g.mon.pos = Vector3(at.x, 0.0, at.y)
 	g.mon.state = "PATROL"
 
@@ -706,7 +707,7 @@ func step_freeze(t: float) -> void:
 	if pause_until < 0.0:
 		m.state = "PATROL"
 		m.pause_t = 0.0
-		rspeed = 2.6
+		rspeed = 3.0
 		face_to = Vector2(INF, INF)
 		if d < 16.0:
 			mark("heart_on", t)
@@ -726,7 +727,7 @@ func step_freeze(t: float) -> void:
 		m.state = "PATROL"
 		m.pause_t = 0.0
 		m.lure_t = 0.0
-		rspeed = 2.8
+		rspeed = 3.2
 		if d > 18.0:
 			mark("heart_off", t)
 		if d > 26.0 or rs >= poly_len(rpath) - 0.5:

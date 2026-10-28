@@ -121,7 +121,8 @@ def main():
                 pitch *= 0.72
                 gain *= 1.15
             inputs += ["-i", sub if s == "SUB" else snd(s)]
-            p = "asetrate=48000*%.3f,aresample=48000," % pitch if pitch != 1 else ""
+            # asetrate takes a plain number of samples a second, not an expression
+            p = "asetrate=%d,aresample=48000," % int(48000 * pitch) if pitch != 1 else ""
             filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,%svolume=%.2f,adelay=%d:all=1[s%d]"
                         % (idx, p, gain, int(start * 1000), idx))
             mix.append("[s%d]" % idx)

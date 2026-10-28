@@ -103,7 +103,11 @@ jobs:
 
       - name: Sound design and captions
         run: |
-          python3 tools/shorts/compose.py --clip out/clip.avi --log godot.log --recipe $RECIPE --out out/${RECIPE}_seed${SEED}.mp4
+          set -o pipefail
+          if ! python3 tools/shorts/compose.py --clip out/clip.avi --log godot.log --recipe $RECIPE --out out/${RECIPE}_seed${SEED}.mp4 2>&1 | tee compose.log; then
+            echo "::error title=compose $RECIPE seed $SEED::$(tail -15 compose.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')"
+            exit 1
+          fi
           echo "::notice title=final $RECIPE seed $SEED::$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/${RECIPE}_seed${SEED}.mp4) seconds"
 
       - uses: actions/upload-artifact@v4

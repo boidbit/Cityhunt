@@ -12,7 +12,7 @@ on:
         description: "Which Short: one recipe, all of them, or a random recipe for each video"
         type: choice
         default: random
-        options: [random, all, flip, ram, domino, nearmiss, freeze]
+        options: [random, all, flip, hunter, ram, domino, nearmiss, freeze]
       count:
         description: "How many videos (with 'all': how many of each recipe)"
         type: choice
@@ -44,7 +44,7 @@ jobs:
         run: |
           python3 - <<'EOF'
           import json, os, random
-          recipes = ["flip", "ram", "domino", "nearmiss", "freeze"]
+          recipes = ["flip", "hunter", "ram", "domino", "nearmiss", "freeze"]
           pick, n, s = os.environ["RECIPE"], int(os.environ["COUNT"]), os.environ.get("SEED", "").strip()
           base = int(s) if s.isdigit() else random.randint(1, 9000)
           jobs = []

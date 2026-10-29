@@ -20,7 +20,8 @@ SND = os.path.join(ROOT, "godot", "assets", "sounds")
 WHOOSH = os.path.join(ROOT, "getaway", "assets", "sounds", "whoosh.wav")
 FONT = os.path.join(ROOT, "getaway", "assets", "fonts", "BigShouldersDisplay.ttf")
 
-HOOK = {"flip": "WAIT FOR IT", "ram": "CAR VS T-REX", "nearmiss": "TOO CLOSE", "freeze": "DO NOT MOVE", "domino": ""}
+HOOK = {"flip": "WAIT FOR IT", "ram": "CAR VS T-REX", "nearmiss": "TOO CLOSE", "freeze": "DO NOT MOVE", "domino": "",
+        "hunter": "HUNT IT DOWN"}
 
 # What to paste into YouTube for each Short: a title picked by the seed (so two videos of one recipe differ),
 # a description and tags. Titles stay under 100 characters; no film or car brand names.
@@ -35,6 +36,8 @@ TITLES = {
                  "Don't Look Back… 🦖🚗", "Outrunning a T-Rex 🦖💨"],
     "freeze": ["Don't Move… It Can't See You 🦖", "Hiding From a T-Rex 😰", "The T-Rex Is Right There… 🦖",
                "Hold Your Breath 😶🦖", "It Hunts by Movement… 🦖"],
+    "hunter": ["He Hunted Down the T-Rex 🦖💥", "Car vs T-Rex: Round Two 🚗💥", "The Hunter Becomes the Hunted… 🦖",
+               "Taking Down a T-Rex With a Car 😳", "Full Speed. Twice. 💥🦖"],
 }
 STORY = {
     "flip": "A T-Rex chases a car through an empty city, bites it twice and throws it over. Watch it in slow motion.",
@@ -42,20 +45,22 @@ STORY = {
     "domino": "A T-Rex charges down a street full of parked cars and throws every one of them aside.",
     "nearmiss": "Its jaws snap shut again and again, inches from the car. Can he get away?",
     "freeze": "It sees what moves. He hides beside a car and holds still while the T-Rex sniffs around him.",
+    "hunter": "This time he goes looking for it. Full speed, head on. Then he backs up and does it again.",
 }
 QUESTION = {
     "flip": "Would you have made it out? 👇", "ram": "Who won this one? 👇", "domino": "How many did you count? 👇",
-    "nearmiss": "Closest call you've seen? 👇", "freeze": "Could you stay still? 👇",
+    "nearmiss": "Closest call you've seen? 👇", "freeze": "Could you stay still? 👇", "hunter": "Round three? 👇",
 }
 TAGS = ["t rex", "trex", "dinosaur", "dinosaur chase", "t rex chase", "t rex vs car", "car chase", "dinosaur attack",
         "satisfying", "slow motion", "3d animation", "game", "gameplay", "shorts", "dino", "city", "survival"]
 RECIPE_TAGS = {
     "flip": ["car flip", "car crash", "slow motion crash"], "ram": ["car vs dinosaur", "head on crash", "car crash"],
     "domino": ["car smash", "destruction", "satisfying destruction"], "nearmiss": ["near miss", "close call", "escape"],
-    "freeze": ["hiding", "suspense", "asmr", "stealth"],
+    "freeze": ["hiding", "suspense", "asmr", "stealth"], "hunter": ["car vs dinosaur", "t rex knockout", "head on crash"],
 }
 HASHTAGS = {"flip": "#trex #dinosaur #slowmotion", "ram": "#trex #dinosaur #carcrash", "domino": "#trex #satisfying #dinosaur",
-            "nearmiss": "#trex #dinosaur #closecall", "freeze": "#trex #dinosaur #suspense"}
+            "nearmiss": "#trex #dinosaur #closecall", "freeze": "#trex #dinosaur #suspense",
+            "hunter": "#trex #dinosaur #carcrash"}
 
 
 def metadata(recipe, seed):
@@ -76,19 +81,25 @@ def effects(name, n):
     k = n % 3 + 1
     if name.startswith("bite"):
         return [("clang_2", 1.0, 0, 1), ("growl_1", 0.8, 0.05, 1), ("SUB", 0.8, 0, 1)]
+    if name == "lift":
+        return [("clang_3", 1.0, 0, 0.9), ("growl_2", 1.0, 0.05, 0.9), ("shatter_2", 0.7, 0.1, 1), ("SUB", 0.7, 0, 1)]
+    if name == "fall":
+        return [("roar_2", 0.9, 0, 0.75), ("boom_1", 1.0, 0.6, 0.8), ("SUB", 1.0, 0.6, 1), ("thud_1", 1.0, 0.65, 0.7)]
+    if name == "caught":
+        return [("roar_3", 1.0, 0, 1), ("boom_2", 0.9, 0.25, 0.8), ("SUB", 1.0, 0.25, 1), ("growl_2", 0.8, 0.4, 0.9)]
     if name == "flip":
         return [("whoosh", 1.0, 0, 0.7), ("roar_2", 0.9, 0.1, 1)]
     if name == "land":
         return [("boom_1", 1.0, 0, 1), ("shatter_1", 1.0, 0.02, 1), ("clang_3", 0.9, 0.05, 1), ("SUB", 1.0, 0, 1)]
-    if name == "ram":
+    if name.startswith("ram"):
         return [("boom_2", 1.0, 0, 1), ("clang_1", 1.0, 0.01, 1), ("shatter_2", 0.9, 0.03, 1), ("SUB", 1.0, 0, 1),
                 ("roar_3", 0.9, 0.7, 1)]
     if name.startswith("toss"):
         return [("clang_%d" % k, 0.95, 0, 1), ("shatter_%d" % (n % 2 + 1), 0.8, 0.04, 1), ("SUB", 0.7, 0, 1)]
     if name.startswith("snap"):
         return [("growl_%d" % k, 0.8, 0, 1), ("clicks_%d" % k, 1.0, 0.12, 1)]
-    if name in ("roar", "roar_end"):
-        return [("roar_1" if name == "roar" else "roar_3", 1.0, 0, 1)]
+    if name in ("roar", "roar_2", "roar_end"):
+        return [("roar_1" if name == "roar" else ("roar_2" if name == "roar_2" else "roar_3"), 1.0, 0, 1)]
     if name == "sniff":
         return [("growl_3", 0.45, 0.3, 0.8)]
     if name.startswith("slow_on"):
@@ -123,15 +134,23 @@ def main():
         fh.write(metadata(a.recipe, a.seed))
 
     events = []
+    pre = 0.0   # recorded before the shot started (the game's start screen): cut off
     with open(a.log, errors="replace") as fh:
         for line in fh:
             m = re.match(r"^EVENT (\S+) ([0-9.]+)", line)
             if m:
                 events.append((m.group(1), float(m.group(2))))
+            m = re.match(r"^PREROLL ([0-9.]+)", line)
+            if m:
+                pre = float(m.group(1))
     ev = dict(events)
-    dur = float(probe(a.clip, "format=duration"))
+    dur = float(probe(a.clip, "format=duration")) - pre
     has_audio = bool(probe(a.clip, "stream=index", "a"))
-    print("clip %.2f s, audio %s, events %s" % (dur, has_audio, events))
+    # nobody dies on screen: if the creature gets him, cut to black a moment after and hold it under the sound
+    vend = min(dur, ev["caught"] + 0.3) if "caught" in ev else dur
+    black = 1.4 if "caught" in ev else 0.0
+    total = vend + black
+    print("clip %.2f s after %.2f s cut, audio %s, events %s" % (dur, pre, has_audio, events))
 
     # slow-motion windows: impacts inside them are played lower and heavier
     windows = []
@@ -147,7 +166,7 @@ def main():
     run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=44:sample_rate=48000:duration=1.5",
          "-af", "volume=3,afade=t=in:d=0.01,afade=t=out:st=0.05:d=1.45,aformat=channel_layouts=stereo", sub])
 
-    inputs = ["-i", a.clip]
+    inputs = ["-ss", "%.3f" % pre, "-i", a.clip]
     if not has_audio:
         inputs += ["-f", "lavfi", "-t", "%.2f" % dur, "-i", "anullsrc=r=48000:cl=stereo"]
     game_in = 0 if has_audio else 1
@@ -155,9 +174,9 @@ def main():
     wind_in = game_in + 1 if not has_audio else 1
     filt = []
     mix = ["[ga]", "[amb]"]
-    filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,volume=1.0[ga]" % game_in)
     # (atrim by name: its second positional option is another start, not the end)
-    filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,volume=0.2[amb]" % (wind_in, dur))
+    filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,apad,volume=1.0[ga]" % (game_in, vend))
+    filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,volume=0.2[amb]" % (wind_in, total))
     idx = wind_in + 1
     count = {}
     for name, t in events:
@@ -165,7 +184,7 @@ def main():
         count[kind] = count.get(kind, 0) + 1
         for s, gain, delay, pitch in effects(name, count[kind]):
             start = t + delay
-            if start >= dur:
+            if start >= total:
                 continue
             if slowed(t) and s != "whoosh":
                 pitch *= 0.72
@@ -178,8 +197,8 @@ def main():
             mix.append("[s%d]" % idx)
             idx += 1
     # the heartbeat, from when it comes near to when it has gone
-    on = ev.get("heart_on", dur)
-    off = ev.get("heart_off", dur)
+    on = ev.get("heart_on", vend)
+    off = ev.get("heart_off", vend)
     if off - on > 1.0:
         inputs += ["-stream_loop", "-1", "-i", snd("heart")]
         filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,asetpts=PTS-STARTPTS,"
@@ -202,7 +221,7 @@ def main():
         for name, t in events:
             if name.startswith("toss_"):
                 n += 1
-                cap(str(n), t, min(t + 0.9, dur), 260, "h*0.12")
+                cap(str(n), t, min(t + 0.9, total), 260, "h*0.12")
     # motion blur: the clip is recorded faster than 30 fps; each output frame is the average of the frames
     # over three quarters of its time (a 270 degree shutter), the way a film camera smears fast motion
     rate = probe(a.clip, "stream=r_frame_rate", "v").split("\n")[0]
@@ -211,11 +230,13 @@ def main():
     blend = max(1, int(round(in_fps / 30.0 * 0.75)))
     blur = "tmix=frames=%d," % blend if blend > 1 else ""
     print("clip at %.0f fps, blending %d frames into each" % (in_fps, blend))
-    vf = blur + "fps=30,scale=1080:1920:flags=lanczos,setsar=1" + "".join("," + c for c in caps)
+    to_black = ("trim=end=%.3f,setpts=PTS-STARTPTS,tpad=stop_mode=add:stop_duration=%.2f:color=black,"
+                % (vend, black)) if black > 0 else ""
+    vf = blur + "fps=30," + to_black + "scale=1080:1920:flags=lanczos,setsar=1" + "".join("," + c for c in caps)
     filt.append("[0:v]%s[v]" % vf)
 
     run(["ffmpeg", "-y", "-v", "warning"] + inputs + ["-filter_complex", ";".join(filt), "-map", "[v]", "-map", "[aout]",
-         "-t", "%.2f" % dur, "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+         "-t", "%.2f" % total, "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
          "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", a.out])
     sheet = a.out[:-4] + "_sheet.png"
     run(["ffmpeg", "-y", "-v", "error", "-i", a.out, "-vf", "fps=1,scale=216:384,tile=10x4", "-frames:v", "1",

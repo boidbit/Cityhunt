@@ -22,7 +22,7 @@ extends SceneTree
 
 const FX := preload("res://tests/short_fx.gd")
 const MAX_LEN := 34.0
-const LUNGES := [3.4, 7.0, 10.6]   # nearmiss: when its jaws snap shut, short of the boot
+const LUNGES := [3.4, 7.2, 11.0, 14.8, 18.6]   # nearmiss: when its jaws snap shut, short of the boot
 const BITES := [10.5, 13.6]        # flip: when its jaws close on the boot (the second lifts the car)
 const SNAP := 5.5                  # flip: a first snap, short
 const A_LAT := 6.5                 # how hard the car may corner (m/s2)
@@ -278,7 +278,6 @@ func setup() -> void:
 	g.pl.flash = false
 	g.cam.keep_aspect = Camera3D.KEEP_HEIGHT
 	bright()
-	solid_cars()
 	fx = FX.new(g)
 	var p := Vector2(g.pl.pos.x, g.pl.pos.z)
 	match recipe:
@@ -306,27 +305,21 @@ func bright() -> void:
 	w.sky_mat.set_shader_parameter("hor", w.fog_base)
 	w.skyline_mat.set_shader_parameter("hor", w.fog_base)
 
-## The car models are shells with no floor, their panels drawn from outside only: turned over, you would see
-## straight through them to the sky. Drawn from both sides (the paint shader makes the inside dark), a car on
-## its roof looks solid.
-func solid_cars() -> void:
-	var done := {}
-	for c in g.veh.cars:
-		for role in c.meshes:
-			for mi in c.meshes[role]:
-				var gi := mi as GeometryInstance3D
-				if gi == null or gi.material_override == null:
-					continue
-				var m: Material = gi.material_override
-				if not done.has(m):
-					done[m] = g.world._two_sided(m)
-				var paint = gi.get_instance_shader_parameter("paint")
-				var livery = gi.get_instance_shader_parameter("livery")
-				gi.material_override = done[m]
-				if paint != null:
-					gi.set_instance_shader_parameter("paint", paint)
-				if livery != null:
-					gi.set_instance_shader_parameter("livery", livery)
+## The car models are shells with no floor: turned over, you would see straight through one to the sky. A dark
+## slab inside the body, between the wheels and below the windows, is what you see of it from underneath.
+## (Drawing the panels from both sides instead makes the models' doubled faces flicker against each other.)
+func floor_slab(c: Dictionary) -> void:
+	var s: Vector3 = c.size / float(c.sc)
+	var b := BoxMesh.new()
+	b.size = Vector3(s.x * 0.86, s.y * 0.3, s.z * 0.7)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.03, 0.03, 0.035)
+	m.roughness = 0.85
+	b.material = m
+	var mi := MeshInstance3D.new()
+	mi.mesh = b
+	mi.position = Vector3(0, s.y * 0.36, 0)
+	(c.node as Node3D).add_child(mi)
 
 # ---------------------------------------------------------------- paths
 func poly_len(pts: Array) -> float:
@@ -598,6 +591,7 @@ func pick_car(p: Vector2) -> void:
 				break
 	car = best
 	last_hp = car.hp
+	floor_slab(car)
 
 ## Puts him in the car and lays its lane from where it stands, with the game's chase camera already pulled back
 ## behind it (left to itself it starts close, inside the car).
@@ -809,24 +803,28 @@ func carry(dt: float) -> void:
 		var side := Vector2(-fw.y, fw.x) * (1.0 if randf() < 0.5 else -1.0)
 		g.car_bitten((fw * 0.6 + side).normalized())   # the second bite throws it over (Game.car_bitten)
 
-## Its jaws snap shut just short of the boot three times; the last in slow motion. Then he floors it, it falls
-## back and roars.
+## Its jaws snap shut just short of the boot five times, closer each time; the last in slow motion. Then he floors
+## it, it falls back and roars.
 func step_nearmiss(t: float, dt: float) -> void:
 	drive(dt)
 	keep_chasing()
 	var base := 13.0
-	if t > 12.2:
+	var away_t: float = LUNGES[-1] + 1.6
+	if t > away_t:
 		want_v = 22.0
-		base = 13.0 + (t - 12.2) * 6.0
-		if not events.has("roar") and t > 13.0:
+		base = 13.0 + (t - away_t) * 6.0
+		if not events.has("roar") and t > away_t + 0.8:
 			g.mon.roar_t = 1.6
 			mark("roar", t)
 		end_after(t, 4.4)
-	var short := jaw_gap() + 0.9
 	var dip := 0.0
+	var short := jaw_gap() + 1.3
 	for i in LUNGES.size():
 		var L: float = LUNGES[i]
-		dip = maxf(dip, 1.0 - clampf(absf(t - L) / 1.1, 0.0, 1.0))
+		var k := 1.0 - clampf(absf(t - L) / 1.1, 0.0, 1.0)
+		if k > dip:
+			dip = k
+			short = jaw_gap() + 1.3 - 0.12 * i   # closer each time
 		if t >= L - 0.35:
 			strike("snap_%d" % (i + 1), "attack", 1.3)
 		if t >= L:
@@ -842,7 +840,7 @@ func setup_hunt(p: Vector2) -> void:
 	get_in()
 	want_v = 0.0
 	var L := float(lane.size())
-	rex_s = clampf(L - 10.0, 60.0, 140.0)
+	rex_s = clampf(L - 10.0, 60.0, 200.0 if recipe == "ram" else 170.0)
 	rex_v = 0.0
 	rex_lane = true
 	var at := lane_at(rex_s)
@@ -867,10 +865,11 @@ func step_hunt(t: float, dt: float, need: int) -> void:
 		mark("roar", t)
 	match hunt:
 		"approach":
-			want_v = 0.0 if t < 1.0 else (24.0 if recipe == "hunter" else 21.0)
+			# a standoff first: the car idles at one end of the street, the creature roars at the other
+			want_v = 0.0 if t < 2.5 else (24.0 if recipe == "hunter" else 21.0)
 			if m.state == "STUN" or downed:
 				rex_v = move_toward(rex_v, 0.0, 10.0 * dt)
-			elif t > 1.8 and gc < 80.0:
+			elif t > 2.5 and gc < 90.0:
 				if m.state != "CHASE":
 					m.set_state("CHASE")
 				m.last_seen_t = g.time
@@ -895,10 +894,17 @@ func step_hunt(t: float, dt: float, need: int) -> void:
 				mark("roar_2", t)
 		"flee":
 			want_v = -9.0
-			rex_v = move_toward(rex_v, 0.0, 10.0 * dt)
 			if t > hunt_t + 2.2 and not events.has("roar_end"):
 				m.roar_t = 1.6
 				mark("roar_end", t)
+			if events.has("roar_end") and t > events.roar_end + 1.2 and m.state != "STUN":
+				# it comes after him as he backs away
+				if m.state != "CHASE":
+					m.set_state("CHASE")
+				m.last_seen_t = g.time
+				rex_v = move_toward(rex_v, -8.0, 6.0 * dt)
+			else:
+				rex_v = move_toward(rex_v, 0.0, 10.0 * dt)
 		"done":
 			want_v = 0.0
 			rex_v = move_toward(rex_v, 0.0, 5.0 * dt)
@@ -928,68 +934,58 @@ func hit(t: float, need: int) -> void:
 		m.rammed(14.0)
 		hunt = "flee" if need == 1 else "back"
 		if need == 1:
-			end_after(t, 5.5)
+			end_after(t, 7.5)
 
 # ---------------------------------------------------------------- domino
-## A straight street with nothing much in it: four to seven parked cars are set out along it, staggered either
-## side of the line the creature will charge down.
+## A long run through the streets, 110 to 160 m and as straight as the city allows, its corners rounded: ten to
+## twelve parked cars are set out along it, staggered either side of the line the creature will charge down.
 func setup_domino() -> void:
-	var cands := []
-	for need in [55.0, 45.0, 35.0]:
+	# the straightest route of the right length out of a handful of seeded tries
+	var best: Array = []
+	var bs := -INF
+	for k in 24:
+		var a := randi() % g.nodes.size()
+		var from := Vector2(g.nodes[a].x, g.nodes[a].z)
 		for i in g.nodes.size():
-			var a := Vector2(g.nodes[i].x, g.nodes[i].z)
-			for j in g.nodes[i].n:
-				if int(j) < i:
-					continue
-				var b := Vector2(g.nodes[j].x, g.nodes[j].z)
-				var L := a.distance_to(b)
-				if L < need:
-					continue
-				var u := (b - a) / L
-				var bad := 0
-				for k in range(0, int(L), 4):
-					var q := a + u * k
-					if not g.col.walkable(q.x, q.y, 2.0):
-						bad += 1
-				if bad <= 2:
-					cands.append([a, b])
-		if cands.size():
-			break
-	var a: Vector2
-	var b: Vector2
-	if cands.size():
-		var pick: Array = cands[randi() % cands.size()]
-		a = pick[0]
-		b = pick[1]
-	else:
-		a = Vector2(g.nodes[0].x, g.nodes[0].z)
-		b = Vector2(g.nodes[g.nodes[0].n[0]].x, g.nodes[g.nodes[0].n[0]].z)
-	if randf() < 0.5:
-		var s := a
-		a = b
-		b = s
-	var L := a.distance_to(b)
-	var u := (b - a) / L
-	var n := Vector2(-u.y, u.x)
-	var start := a - u * 10.0 if g.col.walkable((a - u * 10.0).x, (a - u * 10.0).y, 2.0) else a
-	rpath = [start, b + u * 4.0]
-	# the cars: the nearest parked ones, moved into the street
+			var q := Vector2(g.nodes[i].x, g.nodes[i].z)
+			var d := q.distance_to(from)
+			if d < 110.0 or d > 160.0 or randf() > 0.15:
+				continue
+			var pts: Array = []
+			for j in g.bfs(a, i):
+				pts.append(Vector2(g.nodes[j].x, g.nodes[j].z))
+			var L := poly_len(pts)
+			if pts.size() < 2 or L < 100.0:
+				continue
+			var s := d / L - 0.02 * pts.size()   # straight, and few corners
+			if s > bs:
+				bs = s
+				best = pts
+	if best.is_empty():
+		best = [Vector2(g.nodes[0].x, g.nodes[0].z), Vector2(g.nodes[0].x, g.nodes[0].z) + Vector2(120, 0)]
+	var u0 := ((best[1] as Vector2) - (best[0] as Vector2)).normalized()
+	best.insert(0, (best[0] as Vector2) - u0 * 10.0)
+	rpath = _resample(_round_corners(best), 1.0)
+	var L := poly_len(rpath)
+	# the cars: the nearest parked ones to the run, moved into it
+	var mid := poly_at(rpath, L * 0.5)
 	var free: Array = g.veh.cars.filter(func(c): return c.state == "parked")
-	var mid := a.lerp(b, 0.5)
 	free.sort_custom(func(x, y): return (x.pos as Vector2).distance_to(mid) < (y.pos as Vector2).distance_to(mid))
-	var count := clampi(int((L - 8.0) / 5.0), 4, 7)
+	var count := clampi(int((L - 20.0) / 9.0), 10, 12)
 	for k in count:
 		if k >= free.size():
 			break
 		var c: Dictionary = free[k]
-		var along := 10.0 + k * (L - 10.0) / maxf(count - 1, 1)
-		var side := (1.0 if k % 2 == 0 else -1.0) * randf_range(0.6, 1.4)
-		var p := a + u * along + n * side
-		c.pos = p
+		var along := 14.0 + k * (L - 22.0) / maxf(count - 1, 1)
+		var at := poly_at(rpath, along)
+		var u := poly_dir(rpath, along)
+		var n := Vector2(-u.y, u.x)
+		c.pos = at + n * (1.0 if k % 2 == 0 else -1.0) * randf_range(0.6, 1.4)
 		c.yaw = -u.angle() + randf_range(-0.35, 0.35) + (PI if randf() < 0.5 else 0.0)
 		g.veh._apply(c)
 		g.veh._place_box(c)
 		g.world.move_car_halos(c.i, g.veh.xform(c), false)
+		floor_slab(c)
 		lined.append(c)
 	# him: well out of the way
 	var far := 0
@@ -1005,9 +1001,10 @@ func setup_domino() -> void:
 	rdir = 1.0
 	rspeed = 0.0
 	walk = true
-	var at := poly_at(rpath, 0.0)
-	g.mon.pos = Vector3(at.x, 0.0, at.y)
-	g.mon.yaw = atan2(u.x, u.y)
+	var start := poly_at(rpath, 0.0)
+	var dir0 := poly_dir(rpath, 0.0)
+	g.mon.pos = Vector3(start.x, 0.0, start.y)
+	g.mon.yaw = atan2(dir0.x, dir0.y)
 	g.mon.set_state("CHASE")
 
 func step_domino(t: float) -> void:
@@ -1022,7 +1019,7 @@ func step_domino(t: float) -> void:
 		mark("roar", t)
 	var L := poly_len(rpath)
 	if rs < L - 2.0:
-		rspeed = 0.0 if t < 1.2 else minf(9.5, (t - 1.2) * 7.0)
+		rspeed = 0.0 if t < 1.2 else minf(8.5, (t - 1.2) * 7.0)
 	else:
 		rspeed = 0.0
 		if not events.has("roar_end"):
@@ -1044,11 +1041,14 @@ func step_domino(t: float) -> void:
 			mark("toss_%d" % tossed, t)
 			var thrown: Vector2 = ((c.pos as Vector2) - p).normalized()
 			fx.burst("toss", Vector3(c.pos.x, 1.0, c.pos.y), Vector3(thrown.x, 1.0, thrown.y))
-			if tossed == 1:
+			# slow motion on the first, one in the middle and the last
+			if tossed == 1 and slow_n == 0:
 				slow(t, 1.3, 0.4)
-			elif tossed == lined.size() - 1 and slow_n < 2:
-				slow(t, 2.0, 0.3)
-	if t > 26.0:
+			elif tossed == lined.size() / 2 and slow_n == 1:
+				slow(t, 1.2, 0.45)
+			elif tossed >= lined.size() and slow_n == 2:
+				slow(t, 2.2, 0.3)
+	if t > 32.0:
 		end_after(t, 0.5)
 
 # ---------------------------------------------------------------- freeze
@@ -1096,7 +1096,7 @@ func setup_freeze() -> void:
 	while stop_s > 0.0 and poly_at(rpath, stop_s).distance_to(hide) < 5.5:
 		stop_s -= 0.5
 	# it starts close enough to be there in seconds, not a long walk away
-	rs = maxf(stop_s - 18.0, 0.0)
+	rs = maxf(stop_s - 24.0, 0.0)
 	rdir = 1.0
 	rspeed = 0.0
 	walk = true
@@ -1113,10 +1113,10 @@ func step_freeze(t: float) -> void:
 		m.pause_t = 0.0
 		rspeed = 3.0
 		face_to = Vector2(INF, INF)
-		if d < 16.0:
+		if d < 18.0:
 			mark("heart_on", t)
 		if rs >= stop_s:
-			pause_until = t + 5.5
+			pause_until = t + 7.0
 			mark("sniff", t)
 			slow(t, 1.6, 0.5)
 	elif t < pause_until:
@@ -1132,7 +1132,7 @@ func step_freeze(t: float) -> void:
 		m.pause_t = 0.0
 		m.lure_t = 0.0
 		rspeed = 3.2
-		if d > 18.0:
+		if d > 20.0:
 			mark("heart_off", t)
 		if d > 26.0 or rs >= poly_len(rpath) - 0.5:
 			end_after(t, 1.5)
@@ -1166,14 +1166,15 @@ func cut(t: float) -> String:
 				return "dom_side"
 			if events.has("roar_end") or not events.has("toss_1"):
 				return "dom_front"
-			var since: float = t - events.toss_1
+			# side on, from above and behind it, from ahead: three seconds or more each, round again
+			var since := fmod(t - float(events.toss_1), 10.0)
 			return "dom_side" if since < 3.5 else ("dom_high" if since < 6.5 else "dom_front")
 		"freeze":
 			if t < 2.5:
 				return "feet"
 			if pause_until >= 0.0 and t < pause_until:
-				var into := t - (pause_until - 5.5)
-				return "rex_close" if into > 2.2 and into < 4.0 else "hide_pov"
+				var into := t - (pause_until - 7.0)
+				return "rex_close" if (into > 2.4 and into < 4.4) else "hide_pov"
 			if pause_until >= 0.0 and t < pause_until + 3.0:
 				return "wide"
 			return "hide_pov"
@@ -1182,12 +1183,11 @@ func cut(t: float) -> String:
 				return "game"
 			if slowing:
 				return "side_low"
-			if t > 12.2:
+			if t > float(LUNGES[-1]) + 1.6:
 				return "dash_back"
-			if absf(t - LUNGES[0]) < 0.9:
-				return "dash_back"
-			if absf(t - LUNGES[1]) < 0.9 or absf(t - LUNGES[2]) < 0.9:
-				return "side_low"
+			for i in LUNGES.size():
+				if absf(t - float(LUNGES[i])) < 0.9:
+					return "dash_back" if i % 2 == 0 else "side_low"
 			return "hero"
 		_:
 			if events.has("roar"):

@@ -211,6 +211,20 @@ func _process(_d: float) -> bool:
 	var sv: float = slide[0] / maxf(slide[1], 1)
 	check(sv < 0.15 and slide[1] > 15, "he lands on his feet: a foot on the ground slides %.2f m/s on average (%d frames)" % [sv, slide[1]])
 	check(man.state == Man.MOVE and man.speed > 2.0, "lands and runs on (%.1f m/s)" % man.speed)
+	# flat out: straight into the air off the right foot (the mirrored leap), cut short once down
+	run_for(3.5, 0.0, 6.0)
+	var rm: Dictionary = man.meta.gap_jump_r
+	check(rm.push == "R", "the mirrored leap pushes off the right foot")
+	man.jump("gap_jump_r", float(rm.takeoff), 0.12)
+	var on := false
+	var cut_t := t
+	while t - cut_t < 3.0 and not on:
+		frame(0.0, 6.0)
+		if man.ct >= float(rm.land) + 0.3:
+			on = man.run_on()
+	check(on and man.state == Man.MOVE, "a leap from a sprint can be cut short once he is down (at %.2f s in the clip)" % man.ct)
+	run_for(1.5, 0.0, 6.0)
+	check(man.speed > 4.5, "and he is back up to speed (%.1f m/s)" % man.speed)
 	run_for(2.0, 0.0, 0.0)
 	# the feet
 	# held by the leg IK: the slide left is ~0; how far the clip itself drifted shows the gait

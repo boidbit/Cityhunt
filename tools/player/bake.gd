@@ -55,10 +55,12 @@ const CLIPS := {
 }
 
 # CMU clips: name: [subject (its .asf), motion (its .amc), kind, options]. Sampled at 60 fps for slow
-# motion. "entry_until": the run-up a cycle may join it in (s).
+# motion. "entry_until": the run-up a cycle may join it in (s); "mirror": left and right swapped.
 # - gap_jump: 127_25 "run jump over", a running leap off the left foot onto both feet, then a few steps on
+# - gap_jump_r: the same off the right foot
 const CMU_CLIPS := {
 	"gap_jump": ["127", "127_25", "once", {"from": "run", "to": "run", "entry_until": 0.4}],
+	"gap_jump_r": ["127", "127_25", "once", {"from": "run", "to": "run", "entry_until": 0.4, "mirror": true}],
 }
 const CMU_FPS := 60.0
 # which of the actor's bones turns each of the man's, and the bone the man's is measured towards (none:
@@ -148,7 +150,7 @@ func _initialize() -> void:
 	for name in CMU_CLIPS:
 		var c: Array = CMU_CLIPS[name]
 		opts[name] = c[3]
-		clips[name] = read_cmu(name, c[0], c[1], c[2], clips.run.rot[0])
+		clips[name] = read_cmu(name, c[0], c[1], c[2], clips.run.rot[0], c[3].get("mirror", false))
 		meta[name] = {"kind": c[2], "len": clips[name].length}
 		meta[name].merge(clips[name].extra)
 	for name in clips:
@@ -177,6 +179,16 @@ func _initialize() -> void:
 			var a: Vector3 = c.root[k - j]
 			var b: Vector3 = c.root[k]
 			meta[name].to_speed = Vector2(b.x - a.x, b.y - a.y).length() / (j / c.fps)
+			if meta[name].has("land"):
+				# a leap may be cut short once he is down: for each moment after landing (30 a second), the
+				# stride of the run it matches and how fast he is going
+				var ex := PackedFloat32Array()
+				var lk := int(ceil(float(meta[name].land) * c.fps))
+				for e in range(lk, c.rot.size() - j, int(round(c.fps / FPS))):
+					var ra: Vector3 = c.root[e]
+					var rb: Vector3 = c.root[e + j]
+					ex.append_array([e / c.fps, best_phase(cyc, features(c, e)), Vector2(rb.x - ra.x, rb.y - ra.y).length() / (j / c.fps)])
+				meta[name].exits = ex
 		if opt.has("from"):
 			var cyc: Clip = clips[opt.from]
 			var entry := PackedFloat32Array()
@@ -280,11 +292,20 @@ func read_clip(name: String, folder: String, file: String, kind: String, opt: Di
 ## capture is turned to travel along +z, the root is the hips' path over the ground smoothed over about
 ## a step (the sway stays in the hips), the floor is put under his feet and a foot that would still go
 ## through it is lifted (two-bone IK). The metadata gets when he takes off and lands.
-## base: local rotations for the bones the capture doesn't drive (hands, face).
-func read_cmu(name: String, subject: String, motion: String, kind: String, base: Array) -> Clip:
+## base: local rotations for the bones the capture doesn't drive (hands, face). mirror: the capture seen in
+## a mirror (left and right swapped), for the same move off the other foot.
+func read_cmu(name: String, subject: String, motion: String, kind: String, base: Array, mirror := false) -> Clip:
 	var m := CMU.new()
 	m.load_asf(cmu.path_join(subject + ".asf"))
 	m.load_amc(cmu.path_join(motion + ".amc"))
+	# the mirror: x turned round; a rotation R seen in it is M R M, the left leg's is the right leg's
+	var M := Basis(Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)) if mirror else Basis.IDENTITY
+	var side := func(bone: String) -> String:
+		if mirror and bone[0] in ["l", "r"]:
+			var other := ("r" if bone[0] == "l" else "l") + bone.substr(1)
+			if m.dir.has(other):
+				return other
+		return bone
 	var grest: Array[Transform3D] = []
 	for b in nb:
 		var par := sk.get_bone_parent(b)
@@ -297,8 +318,8 @@ func read_cmu(name: String, subject: String, motion: String, kind: String, base:
 		assert(b >= 0, "no bone " + bn)
 		var e: Array = CMU_MAP[bn]
 		var d: Vector3 = grest[sk.find_bone(e[1])].origin - grest[b].origin if e.size() > 1 else grest[b].basis.x
-		src[b] = e[0]
-		align[b] = Basis(Quaternion(d.normalized(), m.dir[e[0]]))
+		src[b] = side.call(e[0])
+		align[b] = Basis(Quaternion(d.normalized(), M * (m.dir[src[b]] as Vector3)))
 	var pelvis := sk.find_bone("Bip01 Pelvis")
 	var thighs := [sk.find_bone("Bip01 L Thigh"), sk.find_bone("Bip01 R Thigh")]
 	var s: float = (rest[sk.find_bone("Bip01 L Calf")].origin.length() + rest[lfoot].origin.length()) / (m.length.lfemur + m.length.ltibia)
@@ -306,9 +327,10 @@ func read_cmu(name: String, subject: String, motion: String, kind: String, base:
 	var n := int(floor((m.frames.size() - 1) / step))
 	var a0: Dictionary = m.pose(0)
 	var a1: Dictionary = m.pose(n * step)
-	var trav: Vector3 = a1.at.root - a0.at.root
+	var trav: Vector3 = M * ((a1.at.root as Vector3) - (a0.at.root as Vector3))
 	var W := Basis(Vector3.UP, atan2(trav.x, trav.z)).inverse()
-	var start := Vector3(a0.at.root.x, 0.0, a0.at.root.z)
+	var a0r: Vector3 = M * (a0.at.root as Vector3)
+	var start := Vector3(a0r.x, 0.0, a0r.z)
 	var c := Clip.new()
 	c.name = name
 	c.kind = kind
@@ -323,9 +345,9 @@ func read_cmu(name: String, subject: String, motion: String, kind: String, base:
 			var par := sk.get_bone_parent(b)
 			var gb: Basis
 			if b <= pelvis:
-				gb = W * (P.rot.root as Basis) * grest[b].basis
+				gb = W * M * (P.rot.root as Basis) * M * grest[b].basis
 			elif src.has(b):
-				gb = W * (P.rot[src[b]] as Basis) * (align[b] as Basis) * grest[b].basis
+				gb = W * M * (P.rot[src[b]] as Basis) * M * (align[b] as Basis) * grest[b].basis
 			else:
 				gb = g[par] * Basis(base[b] as Quaternion)
 			gb = gb.orthonormalized()
@@ -337,7 +359,7 @@ func read_cmu(name: String, subject: String, motion: String, kind: String, base:
 			var par := sk.get_bone_parent(b)
 			at.append(at[par] + g[par] * rest[b].origin if par >= 0 else Vector3.ZERO)
 		var mid: Vector3 = (at[thighs[0]] + at[thighs[1]]) * 0.5
-		var hj: Vector3 = W * (((P.at.lfemur as Vector3) + (P.at.rfemur as Vector3)) * 0.5 - start) * s
+		var hj: Vector3 = W * (M * (((P.at.lfemur as Vector3) + (P.at.rfemur as Vector3)) * 0.5) - start) * s
 		raw.append(hj - mid)
 		c.rot.append(q)
 	# the root: the hips' path over the ground, smoothed (past the ends it carries straight on)
@@ -368,7 +390,7 @@ func read_cmu(name: String, subject: String, motion: String, kind: String, base:
 	var lifted := _cmu_keep_above_floor(c)
 	var held := _cmu_lock_feet(c)
 	c.extra = _cmu_flight(c)
-	print("%s: CMU %s, scale %.3f, turned %.0f deg, floor %.3f m, %d feet lifted (most %.3f m), feet held (most %.3f m), %s" % [name, motion, s, rad_to_deg(atan2(trav.x, trav.z)), floor_y, lifted[0], lifted[1], held, str(c.extra)])
+	print("%s: CMU %s%s, scale %.3f, turned %.0f deg, floor %.3f m, %d feet lifted (most %.3f m), feet held (most %.3f m), %s" % [name, motion, " (mirrored)" if mirror else "", s, rad_to_deg(atan2(trav.x, trav.z)), floor_y, lifted[0], lifted[1], held, str(c.extra)])
 	return c
 
 ## How low a foot is: its ankle and the ball of the foot over the floor, against the rest pose.

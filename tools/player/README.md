@@ -22,7 +22,7 @@ git checkout HEAD -- Assets/Avatars/Adults/Male_Adult_07 \
 
 Rocketbox has no jumps, so those come from the [CMU Graphics Lab Motion Capture
 Database](http://mocap.cs.cmu.edu) ("free for all uses"): subject 127's skeleton and the motions listed
-in `CMU_CLIPS` in `bake.gd` (`127_25`, "run jump over", for `gap_jump`):
+in `CMU_CLIPS` in `bake.gd` (`127_25`, "run jump over", for `gap_jump` and, seen in a mirror, `gap_jump_r`):
 
 ```
 mkdir cmu && cd cmu

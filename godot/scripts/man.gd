@@ -48,6 +48,7 @@ var real_speed := 0.0           # ground speed after collisions, reported by Pla
 var legs: Array = []            # per leg: [thigh, calf, foot, toe] bone indices
 var locks: Array = []           # per leg: [point held (world), weight, whether it is the ball of the foot (else the ankle)]
 var hold_gap := [0.0, 0.0]      # per leg: how far the clip's foot is from the point held (m)
+var jump_rate := 1.0            # how fast a leap clip plays (faster: he gets over the landing quicker)
 
 func _ready() -> void:
 	body = Node3D.new()
@@ -205,7 +206,7 @@ func move(dt: float, dir: Vector2, want: float, crouch: bool, look := NAN) -> Ve
 			elif ct >= _len(clip) - 0.3 or (go and ct > _len(clip) * 0.5):
 				_to(IDLE, 0.3)
 		JUMP:
-			d = _root_step(dt)
+			d = _root_step(dt, jump_rate)
 			if ct >= _len(clip) - FADE:
 				var m: Dictionary = meta[clip]
 				speed = m.to_speed
@@ -222,14 +223,35 @@ func animate(dt: float) -> void:
 	_pose(dt)
 	_hold_feet(dt)
 
-## Leaps from a run: the jump clip ("gap_jump", motion captured) joins where the step he is in matches
-## its run-up, and the run takes over again as it ends. Returns the clip time it joined at.
-func jump(c := "gap_jump") -> float:
+## Leaps from a run: the jump clip ("gap_jump" off the left foot, "gap_jump_r" off the right, motion
+## captured) joins where the step he is in matches its run-up, and the run takes over again as it ends.
+## at: join the clip there instead (its take-off: straight into the air from a sprint), over fade seconds.
+## Returns the clip time it joined at.
+func jump(c := "gap_jump", at := -1.0, fade := FADE) -> float:
 	var entry: PackedFloat32Array = meta[c].entry
-	var t := entry[int(phase * entry.size()) % entry.size()]
-	_play(JUMP, c, 0.0, FADE)
+	var t := entry[int(phase * entry.size()) % entry.size()] if at < 0.0 else at
+	_play(JUMP, c, 0.0, fade)
 	ct = t
+	jump_rate = 1.0
 	return t
+
+## Cuts a leap short once he is down: the run takes over at the stride that matches the clip now, at the
+## clip's speed. False if he isn't down yet.
+func run_on() -> bool:
+	if state != JUMP or not meta[clip].has("exits"):
+		return false
+	var ex: PackedFloat32Array = meta[clip].exits
+	if ct < ex[0]:
+		return false
+	var best := 0
+	for i in range(0, ex.size(), 3):
+		if absf(ex[i] - ct) < absf(ex[best] - ct):
+			best = i
+	speed = ex[best + 2] * jump_rate
+	phase = ex[best + 1]
+	_to(MOVE, FADE)
+	tails[-1][2] = jump_rate
+	return true
 
 ## The jump clip's time it would join at from a gait phase (see jump()).
 func jump_entry(p: float, c := "gap_jump") -> float:

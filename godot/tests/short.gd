@@ -9,6 +9,8 @@
 ## --mode=domino    the T-Rex charges down a street of parked cars, throwing them aside one after another
 ## --mode=freeze    he hides beside a car while it walks up, sniffs about a few metres off and walks on
 ## --mode=gapjump   he runs over a roof and leaps the alley onto the next, lower roof (slow motion in the air)
+## --mode=roofrun   he sprints along a row of roofs, leaping down and up from one to the next, turns at the end
+##                  of the block, leaps the alley and sprints back along the roofs on the other side
 ## --seed=N         where in the city it happens (and the small random choices)
 ## --fps=N          frames recorded a second (the same as Godot's --fixed-fps); compose.py blends them into motion blur
 ## Do not call a flag --shot, --frames, --day, --play, --loc or --stats: the game itself reads those (--shot=x quits it after 60 frames).
@@ -110,6 +112,21 @@ var gj_down := 0.0            # seconds since he landed
 var gj_steps := 0
 var gj_run := 0.0             # seconds he has been running
 
+# roofrun: the course (a film set: the roofs along it set to the heights it wants) and him on it
+const RR_SPRINT := 5.9        # m/s: flat out (the captured sprint is 5.84)
+const RR_SIDE := 6.0          # how far in from the alley he runs (m)
+var rr := {}                  # the course: path, its legs, the leaps on it (setup_roofrun)
+var rr_mode := ""             # run, air, down (landed, the leap's clip playing on), stop
+var rr_s := 0.0               # how far along the path he is (m)
+var rr_off := Vector3()       # how far off the path he landed, eased away
+var rr_next := 0              # the next leap on the course
+var rr_leap := {}             # the leap he is on
+var rr_air := 0.0
+var rr_down := 0.0
+var rr_toe := [0.0, 0.0]      # the stride phase at which each foot (left, right) leaves the ground, sprinting
+var rr_steps := 0
+var rr_t := 0.0               # game seconds since he set off
+
 ## Runs after the game's own _process (higher priority number = later): puts the car and the creature where the
 ## shot wants them and takes the camera over.
 class Rig extends Node:
@@ -173,6 +190,8 @@ func _process(dt: float) -> bool:
 			step_freeze(t)
 		"gapjump":
 			step_gapjump(t)
+		"roofrun":
+			step_roofrun(t)
 		_:
 			step_flip(t, dt)
 	if walk:
@@ -211,6 +230,10 @@ func after_game(dt: float) -> void:
 		g.pl.actor.visible = false
 		g.mon.actor.visible = false
 		drive_man(dt)
+	if recipe == "roofrun":
+		g.pl.actor.visible = false
+		g.mon.actor.visible = false
+		drive_runner(dt)
 	if downed:
 		# it stays down: the death clip held on its last frame
 		var a: Rex = g.mon.actor
@@ -310,6 +333,8 @@ func setup() -> void:
 			setup_freeze()
 		"gapjump":
 			setup_gapjump()
+		"roofrun":
+			setup_roofrun()
 		_:
 			setup_chase(p)
 	print("shot %s, seed %d, player at %s, creature at %s" % [recipe, seed_n, Vector2(g.pl.pos.x, g.pl.pos.z).round(), Vector2(g.mon.pos.x, g.mon.pos.z).round()])
@@ -1556,12 +1581,577 @@ func _absorb(by: float) -> void:
 	for i in 2:
 		man._reach(man.legs[i], keep[i][0], keep[i][1])
 
+# ---------------------------------------------------------------- roofrun: flat out over the roofs
+## The course: a row of buildings in a block and the row facing it across the alley. He sprints along the
+## first row, turns at the end of the block, leaps the alley, turns back and sprints along the second, and
+## pulls up at its far end, short of the street. It is a film set: the city's roofs differ by 5-60 m from one
+## building to the next, so each roof along the way is put at the height the course wants (down 1.6-3.2 m or
+## up 0.6-1.1 m from the one before, now and then level), its walls drawn up or down to it and whatever stood
+## on it taken away (_rr_set_roofs). Picked by the seed.
+## He leaps each edge off whichever foot is the last to leave the ground before it (the captured leap and
+## its mirror image), straight out of his sprint; the arc is solved for each leap so he clears the edge and
+## lands on the far roof (_rr_takeoff).
+func setup_roofrun() -> void:
+	g.mon.awareness = 0.0
+	walk = true
+	rpath = [Vector2(-g.bound + 4.0, -g.bound + 4.0), Vector2(-g.bound + 6.0, -g.bound + 4.0)]
+	rs = 0.0
+	rspeed = 0.0
+	man = Man.new()
+	g.add_child(man)
+	var lots: Array = []
+	for c in g.world.col:
+		if float(c[2]) == 0.0 and float(c[3]) >= 10.0 and int(c[6]) == 3:
+			lots.append(c)
+	var opts := _rr_courses(lots)
+	print("roofrun: %d courses" % opts.size())
+	if opts.is_empty():
+		push_error("roofrun: no course")
+		quit(1)
+		return
+	rr = opts[randi() % opts.size()]
+	_rr_heights()
+	_rr_set_roofs()
+	dress_roofs(roof_tris(), lots)
+	_rr_path()
+	_rr_feet_tables()
+	var p0 := _rr_at(0.0)
+	var d0 := _rr_dir(0.0)
+	man.reset(atan2(d0.x, d0.y))
+	man.state = Man.MOVE
+	man.speed = RR_SPRINT
+	man.real_speed = RR_SPRINT
+	man.phase = 0.0
+	man.position = Vector3(p0.x, _rr_floor(p0), p0.y)
+	man.rotation.y = man.yaw
+	rr_mode = "run"
+	var hs := []
+	for L in rr.lots:
+		hs.append(snappedf(L.h, 0.1))
+	var kinds := []
+	for L in rr.leaps:
+		kinds.append("%s %+.1f" % [L.kind, L.h_to - L.h_from])
+	print("roofrun: %.0f m of path, roofs %s, leaps %s" % [rr.len, str(hs), str(kinds)])
+
+## Rows of lots (end to end, the same depth) and pairs of rows facing each other across an alley (2.2-3.4 m
+## between the walls) the length of the same block, at least two lots each (none shorter than 7 m), deep enough
+## to run along, no towers; a course for each pair, each way across the alley and each end of the block, if its
+## roofs are long enough where it needs room: a run-up on the first, a turn and a run-up after the alley, a
+## landing and pulling up on the last.
+func _rr_courses(lots: Array) -> Array:
+	var rows := []
+	for axis in 2:
+		var lo := 0 if axis == 0 else 4
+		var cl := 4 if axis == 0 else 0
+		var groups := {}
+		for c in lots:
+			var key := "%.1f/%.1f" % [c[cl], c[cl + 1]]
+			if not groups.has(key):
+				groups[key] = []
+			groups[key].append(c)
+		for key in groups:
+			var gl: Array = groups[key]
+			gl.sort_custom(func(a, b): return float(a[lo]) < float(b[lo]))
+			var run := [gl[0]]
+			for i in range(1, gl.size()):
+				if absf(float(gl[i][lo]) - float(run[-1][lo + 1])) < 0.05:
+					run.append(gl[i])
+				else:
+					rows.append({"axis": axis, "lots": run})
+					run = [gl[i]]
+			rows.append({"axis": axis, "lots": run})
+	var out := []
+	for r1 in rows:
+		for r2 in rows:
+			if r1 == r2 or r1.axis != r2.axis or r1.lots.size() < 2 or r2.lots.size() < 2:
+				continue
+			var axis: int = r1.axis
+			var lo := 0 if axis == 0 else 4
+			var cl := 4 if axis == 0 else 0
+			var a: Array = r1.lots
+			var b: Array = r2.lots
+			var tall := false
+			for c in a + b:
+				tall = tall or float(c[3]) > 55.0
+			if tall:
+				continue
+			for side in [1.0, -1.0]:
+				# side +1: the second row lies the far side of the alley in +across
+				var gap: float = (float(b[0][cl]) - float(a[0][cl + 1])) if side > 0.0 else (float(a[0][cl]) - float(b[0][cl + 1]))
+				if gap < 2.2 or gap > 3.4:
+					continue
+				if float(a[0][cl + 1]) - float(a[0][cl]) < RR_SIDE + 3.0 or float(b[0][cl + 1]) - float(b[0][cl]) < RR_SIDE + 4.0:
+					continue
+				var a0 := float(a[0][lo])
+				var a1 := float(a[-1][lo + 1])
+				var b0 := float(b[0][lo])
+				var b1 := float(b[-1][lo + 1])
+				if absf(a0 - b0) > 1.5 or absf(a1 - b1) > 1.5:
+					continue
+				var short := false
+				for c in a + b:
+					short = short or float(c[lo + 1]) - float(c[lo]) < 7.0
+				if short:
+					continue
+				for end in [1.0, -1.0]:
+					var first := a.duplicate()
+					var second := b.duplicate()
+					if end > 0.0:
+						second.reverse()
+					else:
+						first.reverse()
+					var span := func(c: Array) -> float: return float(c[lo + 1]) - float(c[lo])
+					# too short a roof to set off on: start on the next; too short to pull up on: stop a roof early
+					while first.size() > 2 and span.call(first[0]) < 11.0:
+						first.pop_front()
+					while second.size() > 2 and span.call(second[-1]) < 14.0:
+						second.pop_back()
+					if span.call(first[0]) < 11.0 or span.call(first[-1]) < 9.0 or span.call(second[0]) < 13.0 or span.call(second[-1]) < 14.0:
+						continue
+					out.append({"axis": axis, "side": side, "end": end, "r1": first, "r2": second,
+						"e1": float(a[0][cl + 1]) if side > 0.0 else float(a[0][cl]),
+						"e2": float(b[0][cl]) if side > 0.0 else float(b[0][cl + 1]),
+						"turn": minf(a1, b1) if end > 0.0 else maxf(a0, b0)})
+	return out
+
+## The heights the course wants: from a start of 26-34 m, each roof down 1.6-3.2 m from the one before (55%), up
+## 0.6-1.1 m (30%) or level, at least one leap each way; the far side of the alley 0.8-2.2 m lower.
+func _rr_heights() -> void:
+	var lots := []
+	for c in rr.r1:
+		lots.append({"box": c, "row": 1, "h0": float(c[3]), "kind": "", "dh": 0.0})
+	for c in rr.r2:
+		lots.append({"box": c, "row": 2, "h0": float(c[3]), "kind": "", "dh": 0.0})
+	var pick_dh := func(k: String) -> float:
+		match k:
+			"gap":
+				return -randf_range(0.8, 2.2)
+			"down":
+				return -randf_range(1.6, 3.2)
+			"up":
+				return randf_range(0.6, 1.1)
+		return 0.0
+	var count := {"down": 0, "up": 0, "level": 0}
+	for i in range(1, lots.size()):
+		var k := "gap"
+		if lots[i].row == lots[i - 1].row:
+			var r := randf()
+			k = "down" if r < 0.55 else ("up" if r < 0.85 else "level")
+			count[k] += 1
+		lots[i].kind = k
+		lots[i].dh = pick_dh.call(k)
+	# at least one leap down and one up: a level one turned, or one of a kind there are two of
+	for want in ["down", "up"]:
+		if count[want] > 0:
+			continue
+		for i in range(1, lots.size()):
+			var k: String = lots[i].kind
+			if k != "gap" and k != want and (k == "level" or count[k] > 1):
+				count[k] -= 1
+				count[want] += 1
+				lots[i].kind = want
+				lots[i].dh = pick_dh.call(want)
+				break
+	var h := randf_range(26.0, 34.0)
+	for i in lots.size():
+		h += float(lots[i].dh)
+		# (never lower than 16 m)
+		lots[i].h = maxf(h, 16.0)
+	rr.lots = lots
+
+## Puts each roof of the course at its height. In the city's building mesh its walls are drawn up or down to it
+## (the texture moves with the top of the wall, so the windows carry on rather than stretch) and its cornice
+## goes with it; a top storey set back on it, and in the props mesh whatever stood on the roof (air handlers,
+## water towers), is flattened out of sight under it: the run goes over it.
+func _rr_set_roofs() -> void:
+	var edits := []
+	for L in rr.lots:
+		edits.append([L.box, float(L.h0), float(L.h)])
+	for mi in g.world.find_children("*", "MeshInstance3D", true, false):
+		var nm := String(mi.name)
+		if nm != "build" and nm != "props":
+			continue
+		var arr := (mi as MeshInstance3D).mesh.surface_get_arrays(0)
+		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var nv: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var uv: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV] if arr[Mesh.ARRAY_TEX_UV] != null else PackedVector2Array()
+		var k := _facade_v_per_metre(arr) if nm == "build" else 0.0
+		var moved := 0
+		for i in v.size():
+			var p := v[i]
+			for e in edits:
+				var r: Array = e[0]
+				var h0: float = e[1]
+				var h1: float = e[2]
+				if p.x < float(r[0]) - 0.32 or p.x > float(r[1]) + 0.32 or p.z < float(r[4]) - 0.32 or p.z > float(r[5]) + 0.32:
+					continue
+				var inside := p.x > float(r[0]) + 0.2 and p.x < float(r[1]) - 0.2 and p.z > float(r[4]) + 0.2 and p.z < float(r[5]) - 0.2
+				if nm == "build":
+					if absf(p.y - h0) < 0.006 or absf(p.y - (h0 - 0.5)) < 0.006:
+						var on_wall := absf(nv[i].y) < 0.5 and (absf(p.x - float(r[0])) < 0.01 or absf(p.x - float(r[1])) < 0.01 or absf(p.z - float(r[4])) < 0.01 or absf(p.z - float(r[5])) < 0.01)
+						if on_wall and absf(p.y - h0) < 0.006 and uv.size():
+							uv[i].y += k * (h1 - h0)
+						p.y += h1 - h0
+					elif p.y > h0 + 0.006 and p.y < h0 + 12.0 and inside:
+						p.y = h1 - 0.05
+					else:
+						continue
+				else:
+					if p.y > h0 - 0.02 and p.y < h0 + 12.0 and p.x > float(r[0]) and p.x < float(r[1]) and p.z > float(r[4]) and p.z < float(r[5]):
+						p.y = h1 - 0.1
+					else:
+						continue
+				v[i] = p
+				moved += 1
+				break
+		arr[Mesh.ARRAY_VERTEX] = v
+		if uv.size():
+			arr[Mesh.ARRAY_TEX_UV] = uv
+		var m2 := ArrayMesh.new()
+		m2.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		(mi as MeshInstance3D).mesh = m2
+		print("roofrun: %s mesh: %d points moved (facade %.4f per m)" % [nm, moved, k])
+	for e in edits:
+		e[0][3] = e[2]
+
+## How far the facade texture moves up a wall for each metre (from a wall edge of the building mesh).
+func _facade_v_per_metre(arr: Array) -> float:
+	var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+	var uv: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+	var ix: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+	for t in range(0, ix.size(), 3):
+		for a in 3:
+			var i := ix[t + a]
+			var j := ix[t + (a + 1) % 3]
+			if absf(v[i].x - v[j].x) < 0.001 and absf(v[i].z - v[j].z) < 0.001 and absf(v[i].y - v[j].y) > 3.0:
+				return (uv[j].y - uv[i].y) / (v[j].y - v[i].y)
+	return 1.0 / 56.0
+
+## The path (a point every 0.25 m): along the first row on a line RR_SIDE in from the alley, a quarter turn
+## towards it near the end of the block, across it, a quarter turn back, along the second row to its far end;
+## and on it the leaps: where the roof he is on ends, where the next begins, how high each is.
+func _rr_path() -> void:
+	var axis: int = rr.axis
+	var lo := 0 if axis == 0 else 4
+	var side: float = rr.side
+	var end: float = rr.end
+	var at := func(a: float, c: float) -> Vector2: return Vector2(a, c) if axis == 0 else Vector2(c, a)
+	var A: Vector2 = at.call(end, 0.0)
+	var C: Vector2 = at.call(0.0, side)
+	var c1: float = float(rr.e1) - side * RR_SIDE
+	var c2: float = float(rr.e2) + side * (RR_SIDE + 0.5)
+	var rt := 3.0
+	var first: Array = rr.r1
+	var a_start: float = (float(first[0][lo]) + 2.5) if end > 0.0 else (float(first[0][lo + 1]) - 2.5)
+	var a_turn: float = float(rr.turn) - end * 7.0
+	var a_x: float = a_turn + end * rt
+	var last: Array = rr.r2[-1]
+	var a_far: float = float(last[lo]) if end > 0.0 else float(last[lo + 1])
+	var pts: Array = [at.call(a_start, c1)]
+	pts.append(at.call(a_turn, c1))
+	var o1: Vector2 = at.call(a_turn, c1) + C * rt
+	for i in range(1, 9):
+		var th := i / 8.0 * PI * 0.5
+		pts.append(o1 - C * rt * cos(th) + A * rt * sin(th))
+	pts.append(at.call(a_x, c2 - side * rt))
+	var o2: Vector2 = at.call(a_x - end * rt, c2 - side * rt)
+	for i in range(1, 9):
+		var th := i / 8.0 * PI * 0.5
+		pts.append(o2 + A * rt * cos(th) + C * rt * sin(th))
+	pts.append(at.call(a_far + end * 1.0, c2))
+	var path: Array = _resample(pts, 0.25)
+	rr.pts = path
+	rr.len = poly_len(path)
+	# the leaps, where the path leaves one roof for the next
+	var leaps := []
+	var lots: Array = rr.lots
+	for i in range(1, lots.size()):
+		var L: Dictionary = lots[i]
+		var P: Dictionary = lots[i - 1]
+		var leap := {"kind": L.kind, "h_from": P.h, "h_to": L.h, "slow": false, "i": i}
+		if L.kind == "gap":
+			leap.s_edge = poly_closest(path, at.call(a_x, float(rr.e1) + side * 0.3))
+			leap.s_far = poly_closest(path, at.call(a_x, float(rr.e2) - side * 0.3))
+			leap.slow = true
+		else:
+			var row_c := c1 if L.row == 1 else c2
+			var dirn := end if L.row == 1 else -end
+			var bnd: float = (float(P.box[lo + 1]) if dirn > 0.0 else float(P.box[lo]))
+			var sb := poly_closest(path, at.call(bnd, row_c))
+			if L.kind == "level":
+				continue
+			if L.kind == "down":
+				leap.s_edge = sb + 0.3
+				leap.s_far = sb + 0.3
+			else:
+				leap.s_edge = sb - 0.3
+				leap.s_far = sb - 0.3
+		leap.cam_side = C * (1.0 if L.row == 1 else -1.0) if L.kind != "gap" else A
+		leaps.append(leap)
+	# the biggest drop in slow motion too
+	var big := -1
+	for i in leaps.size():
+		if leaps[i].kind == "down" and (big < 0 or leaps[i].h_from - leaps[i].h_to > leaps[big].h_from - leaps[big].h_to):
+			big = i
+	if big >= 0:
+		leaps[big].slow = true
+	rr.leaps = leaps
+	rr.s_stop = rr.len - 9.0
+
+func _rr_at(s: float) -> Vector2:
+	return poly_at(rr.pts, s)
+
+func _rr_dir(s: float) -> Vector2:
+	var d := poly_at(rr.pts, s + 0.5) - poly_at(rr.pts, s - 0.5)
+	return d.normalized() if d.length() > 0.001 else Vector2(0, 1)
+
+## The roof under a point of the course (the highest one of its lots there, cornices included).
+func _rr_floor(p: Vector2) -> float:
+	var y := -INF
+	for L in rr.lots:
+		var r: Array = L.box
+		if p.x > float(r[0]) - 0.3 and p.x < float(r[1]) + 0.3 and p.y > float(r[4]) - 0.3 and p.y < float(r[5]) + 0.3:
+			y = maxf(y, float(L.h))
+	return y if y > -INF else 0.0
+
+## For both leaps (off the left foot and the right): where his feet are, from his hips, through the air (40
+## steps from take-off to landing), for checking he clears the edges; and when each foot leaves the ground in
+## his sprint.
+func _rr_feet_tables() -> void:
+	var sk := man.skel
+	var hips := 0
+	var pts := []
+	for side in ["L", "R"]:
+		pts.append(sk.find_bone("Bip01 %s Foot" % side))
+		pts.append(sk.find_bone("Bip01 %s Toe0" % side))
+	rr.feet = {}
+	for c in ["gap_jump", "gap_jump_r"]:
+		var m: Dictionary = man.meta[c]
+		var tab := []
+		for i in 41:
+			var ct := float(m.takeoff) + (float(m.land) - float(m.takeoff)) * i / 40.0
+			man._apply([[c, ct, 1.0]])
+			var hp := sk.get_bone_global_pose(hips).origin
+			var row := []
+			for k in pts.size():
+				var fp := sk.get_bone_global_pose(pts[k]).origin - hp
+				# a sole under the ankle, the ball of the foot on the ground
+				fp.y -= Man.ANKLE_REST if k % 2 == 0 else Man.BALL_REST
+				row.append(fp)
+			tab.append(row)
+		rr.feet[c] = tab
+	var lows := [[], []]
+	for i in 96:
+		man._apply([["sprint", i / 96.0, 1.0]])
+		for f in 2:
+			var a := sk.get_bone_global_pose(pts[f * 2]).origin.y - Man.ANKLE_REST
+			var b := sk.get_bone_global_pose(pts[f * 2 + 1]).origin.y - Man.BALL_REST
+			lows[f].append(minf(a, b))
+	for f in 2:
+		var lo: Array = lows[f]
+		var floor_y: float = lo.min()
+		for i in 96:
+			if lo[i] - floor_y < 0.03 and lo[(i + 1) % 96] - floor_y >= 0.03:
+				rr_toe[f] = (i + 1) / 96.0
+	print("roofrun: sprinting, the left foot leaves the ground at %.2f of the stride, the right at %.2f" % rr_toe)
+
+## The beats: slow motion on the big leaps (eased in and out), the end once he has pulled up.
+func step_roofrun(t: float) -> void:
+	if man == null or rr.is_empty():
+		return
+	if rr_mode == "air" and rr_leap.slow and not rr_leap.has("slowed"):
+		rr_leap.slowed = true
+		rr.slow_t0 = t
+		slow(t, (float(rr_leap.T) + 0.3) / GJ_SLOW - 0.3, GJ_SLOW)
+	if slow_until >= 0.0 and rr.has("slow_t0"):
+		var into: float = t - float(rr.slow_t0)
+		var left := slow_until - t
+		var k := clampf(minf(into / 0.25, left / 0.3), 0.0, 1.0)
+		Engine.time_scale = lerpf(1.0, GJ_SLOW, k * k * (3.0 - 2.0 * k))
+	if rr_mode == "stop" and man.state == Man.IDLE:
+		end_after(t, 0.8)
+
+## One frame of him, after the game's own update: on the path, in the air, landed.
+func drive_runner(dt: float) -> void:
+	if man == null or rr.is_empty():
+		return
+	var t := now()
+	rr_t += dt
+	match rr_mode:
+		"run", "stop":
+			var before := fposmod(man.phase, 1.0)
+			var dir := _rr_dir(rr_s)
+			var yaw0 := man.yaw
+			var step := man.move(dt, dir, RR_SPRINT if rr_mode == "run" else 0.0, false)
+			man.real_speed = man.speed
+			rr_s = minf(rr_s + step.length(), rr.len)
+			rr_off = rr_off.lerp(Vector3.ZERO, 1.0 - exp(-dt / 0.35))
+			var p := _rr_at(rr_s)
+			var nd := _rr_dir(rr_s)
+			man.yaw = atan2(nd.x, nd.y)
+			man.turn_rate = angle_difference(yaw0, man.yaw) / maxf(dt, 1e-4)
+			man.position = Vector3(p.x, _rr_floor(p), p.y) + rr_off
+			man.rotation.y = man.yaw
+			man.animate(dt)
+			if rr_mode == "run":
+				var after := fposmod(man.phase, 1.0)
+				for f in 2:
+					var ph: float = rr_toe[f]
+					var crossed: bool = (before < ph and after >= ph) or (before > after and (before < ph or after >= ph))
+					if crossed and rr_next < rr.leaps.size() and rr_mode == "run":
+						var L: Dictionary = rr.leaps[rr_next]
+						var d: float = float(L.s_edge) - rr_s
+						var thr: float = {"gap": 0.15, "down": 0.5, "up": 1.2}[L.kind]
+						if d - man._stride(man.speed) * 0.5 < thr and d > -0.3:
+							_rr_takeoff(L, f, t)
+				# (an edge reached with no foot to leave from: off it anyway; a wall to leap up, a stride short of it)
+				if rr_mode == "run" and rr_next < rr.leaps.size() and rr_s >= float(rr.leaps[rr_next].s_edge) - (1.0 if rr.leaps[rr_next].kind == "up" else 0.05):
+					var ph := fposmod(man.phase - rr_toe[0], 1.0)
+					_rr_takeoff(rr.leaps[rr_next], 0 if ph < 0.5 else 1, t)
+				if rr_mode == "run" and rr_s >= float(rr.s_stop) and rr_next >= rr.leaps.size():
+					rr_mode = "stop"
+					mark("pull_up", t)
+		"air":
+			var L := rr_leap
+			var c: String = L.clip
+			var m: Dictionary = man.meta[c]
+			rr_air += dt
+			var T: float = L.T
+			var tau := minf(rr_air, T)
+			var hips: Vector3 = L.hips0 + (L.vh as Vector3) * tau + Vector3(0.0, float(L.vy) * tau - 0.5 * GRAV * tau * tau, 0.0)
+			var ct := float(m.takeoff) + (float(m.land) - float(m.takeoff)) * _warp(tau / T, L.k)
+			man.ct = ct
+			man.position = hips - Basis(Vector3.UP, man.yaw) * man.clip_hips(c, ct)
+			man.rotation.y = man.yaw
+			man.animate(dt)
+			if rr_air >= T:
+				man.position.y = L.h_to
+				man.jump_rate = 1.6
+				rr_mode = "down"
+				rr_down = 0.0
+				rr_next += 1
+				mark("touchdown_%d" % rr_next, t)
+		"down":
+			var L := rr_leap
+			var m: Dictionary = man.meta[L.clip]
+			rr_down += dt
+			var step := man.move(dt, Vector2(), 0.0, false)
+			man.position += step
+			man.position.y = L.h_to
+			man.rotation.y = man.yaw
+			man.animate(dt)
+			var k := rr_down / 0.1 if rr_down < 0.1 else maxf(0.0, 1.0 - (rr_down - 0.1) / 0.3)
+			if k > 0.0:
+				_absorb(float(L.deep) * (k * k * (3.0 - 2.0 * k)))
+			if man.ct >= float(m.land) + 0.3 and man.run_on():
+				var q := Vector2(man.position.x, man.position.z)
+				rr_s = poly_closest(rr.pts, q)
+				var on := _rr_at(rr_s)
+				rr_off = Vector3(q.x - on.x, 0.0, q.y - on.y)
+				rr_mode = "run"
+	if man.step != rr_steps:
+		rr_steps = man.step
+		mark("step_%d" % rr_steps, t)
+
+## Off the edge, out of his stride: the leap off the foot leaving the ground, joined in the air; his hips leave
+## at his running speed and rise high enough for the leap at hand, as low as will do: off level ground or down
+## it is the captured leap's own rise (more if he must carry further to clear a gap); up it is whatever lifts
+## him over the edge. Checked against where his feet go (the captured leap, slowed or quickened to the time in
+## the air): nothing may go into a roof before he lands.
+func _rr_takeoff(L: Dictionary, foot: int, t: float) -> void:
+	var c := "gap_jump" if foot == 0 else "gap_jump_r"
+	var m: Dictionary = man.meta[c]
+	var R := Basis(Vector3.UP, man.yaw)
+	var u := R * Vector3(0, 0, 1)
+	var hips0 := man.position + R * man.skel.get_bone_pose_position(0)
+	var vh := man.speed
+	var y1: float = float(L.h_to) + man.clip_hips(c, float(m.land)).y
+	var r1 := man._root(c, float(m.land))
+	var heel: float = float(m.land_heel) - (r1.y + man.clip_hips(c, float(m.land)).z)
+	var margin: float = {"gap": 0.35, "down": 0.6, "up": 0.45}[L.kind]
+	var need: float = float(L.s_far) + margin - heel - rr_s
+	var vy := maxf(sqrt(2.0 * GRAV * float(m.rise)), sqrt(2.0 * GRAV * maxf(0.0, y1 - hips0.y + 0.3)))
+	var T := 0.0
+	var tries := 0
+	while tries < 30:
+		tries += 1
+		var disc := vy * vy + 2.0 * GRAV * (hips0.y - y1)
+		if disc < 0.0:
+			vy += 0.2
+			continue
+		T = (vy + sqrt(disc)) / GRAV
+		if vh * T < need:
+			vy += 0.2
+			continue
+		if not _rr_clear(L, c, hips0, u, vh, vy, T):
+			vy += 0.2
+			continue
+		break
+	var k := clampf(T / (float(m.land) - float(m.takeoff)), 0.5, 2.6)
+	man.jump(c, float(m.takeoff), 0.12)
+	rr_leap = L
+	L.clip = c
+	L.hips0 = hips0
+	L.vh = u * vh
+	L.vy = vy
+	L.T = T
+	L.k = k
+	var apex := hips0.y + vy * vy / (2.0 * GRAV)
+	L.deep = clampf(0.045 * (apex - y1), 0.0, 0.2)
+	rr_air = 0.0
+	rr_mode = "air"
+	mark("takeoff_%d" % (rr_next + 1), t)
+	print("roofrun: leap %d (%s %+.1f m) off the %s foot %.2f m before the edge at %.1f m/s: %.2f s in the air, up at %.1f m/s (%d tries), lands %.2f m past it"
+		% [rr_next + 1, L.kind, float(L.h_to) - float(L.h_from), "left" if foot == 0 else "right", float(L.s_edge) - rr_s, vh, T, vy, tries, vh * T + rr_s + heel - float(L.s_far)])
+
+## Whether his feet stay out of the roofs through a leap (see _rr_takeoff).
+func _rr_clear(L: Dictionary, c: String, hips0: Vector3, u: Vector3, vh: float, vy: float, T: float) -> bool:
+	var m: Dictionary = man.meta[c]
+	var tab: Array = rr.feet[c]
+	var R := Basis(Vector3.UP, man.yaw)
+	var k := clampf(T / (float(m.land) - float(m.takeoff)), 0.5, 2.6)
+	for i in range(1, 30):
+		var tau := T * i / 30.0
+		var hips: Vector3 = hips0 + u * vh * tau + Vector3(0.0, vy * tau - 0.5 * GRAV * tau * tau, 0.0)
+		var x := _warp(tau / T, k) * 40.0
+		var a := mini(int(x), 39)
+		var w := x - a
+		for j in 4:
+			var off: Vector3 = (tab[a][j] as Vector3).lerp(tab[a + 1][j], w)
+			var p := hips + R * off
+			var s := rr_s + (p - hips0).dot(u)
+			if s >= float(L.s_far) - 0.02 and p.y < float(L.h_to) + (0.03 if i < 27 else -0.02):
+				return false
+			if L.kind == "down" and s <= float(L.s_edge) and p.y < float(L.h_from) - 0.02 and i > 2:
+				return false
+	return true
+
 # ---------------------------------------------------------------- the camera
 ## Which camera at time t. Each recipe has a hero shot that carries most of it (the car and the creature both in
 ## frame); it cuts away only on the beats, for two to three seconds.
 func cut(t: float) -> String:
 	var slowing := slow_until >= 0.0
 	match recipe:
+		"roofrun":
+			# behind him as he runs; side on at each edge as he leaps it, from above the alley for the alley;
+			# ahead of him as he pulls up
+			if rr_mode == "stop":
+				return "rr_end"
+			var L := {}
+			if rr_mode == "air" or rr_mode == "down":
+				L = rr_leap
+			elif rr_next < rr.leaps.size() and float(rr.leaps[rr_next].s_edge) - rr_s < 4.5:
+				L = rr.leaps[rr_next]
+			elif rr_next > 0 and events.has("touchdown_%d" % rr_next) and t < float(events["touchdown_%d" % rr_next]) + 0.9:
+				L = rr.leaps[rr_next - 1]
+			if L.is_empty():
+				rr.cam_leap = -1
+				return "rr_chase"
+			if int(rr.get("cam_leap", -1)) != int(L.i):
+				# a new leap: a new shot, not the last one sliding over
+				rr.cam_leap = int(L.i)
+				last_mode = ""
+			return "rr_alley" if L.kind == "gap" else "rr_leap"
 		"gapjump":
 			# behind him as he runs at the gap; from above the alley as he leaps (the drop under him); low on the
 			# far roof as he comes down; ahead of him as he runs on
@@ -1818,6 +2408,51 @@ func camera(t: float, dt: float) -> void:
 				pos = on_b + d3 * 5.0 + n3 * 1.1 + Vector3(0, 0.9, 0)
 				look = on_b + Vector3(0, 1.0, 0) - d3 * 1.5
 				fov = 62.0
+		"rr_chase", "rr_leap", "rr_alley", "rr_end":
+			var hips := man.skel.global_transform * man.skel.get_bone_global_pose(0).origin
+			var d2 := _rr_dir(rr_s) if rr_mode != "air" else Vector2(sin(man.yaw), cos(man.yaw))
+			var u := Vector3(d2.x, 0.0, d2.y)
+			var L: Dictionary = {}
+			for l in rr.leaps:
+				if int(l.i) == int(rr.get("cam_leap", -1)):
+					L = l
+			if mode == "rr_chase":
+				# close behind him, low, a wide lens: the roof streams past
+				pos = hips - u * 3.4 + Vector3(-u.z, 0.0, u.x) * 0.7 + Vector3(0, 1.0, 0)
+				var under := _rr_floor(Vector2(pos.x, pos.z))
+				pos.y = maxf(pos.y, under + 1.1)
+				look = hips + u * 6.0 + Vector3(0, 0.1, 0)
+				fov = 72.0
+			elif mode == "rr_leap" and not L.is_empty():
+				# low on the lower roof, to one side of where he crosses the edge, the step between them in frame:
+				# down, ahead of the edge (he launches off the roof above towards the lens); up, short of the wall
+				var e := _rr_at(float(L.s_edge))
+				var ed := _rr_dir(float(L.s_edge))
+				var down: bool = float(L.h_to) < float(L.h_from)
+				var E := Vector3(e.x, minf(float(L.h_from), float(L.h_to)), e.y)
+				var n: Vector2 = L.cam_side
+				pos = E + Vector3(n.x, 0.0, n.y) * 4.0 + Vector3(ed.x, 0.0, ed.y) * (2.6 if down else -2.2) + Vector3(0, 0.8, 0)
+				look = hips.lerp(E + Vector3(0, 1.2, 0), 0.3)
+				fov = 64.0
+			elif mode == "rr_alley" and not L.is_empty():
+				# over the alley, along it and up: he leaves the edge with the slot of the alley under him
+				var e1 := _rr_at(float(L.s_edge))
+				var e2 := _rr_at(float(L.s_far))
+				var mid := Vector3((e1.x + e2.x) * 0.5, float(L.h_from), (e1.y + e2.y) * 0.5)
+				var along: Vector2 = L.cam_side
+				var ed := (e2 - e1).normalized()
+				pos = mid - Vector3(along.x, 0.0, along.y) * 5.5 - Vector3(ed.x, 0.0, ed.y) * 0.8 + Vector3(0, 4.6, 0)
+				look = hips.lerp(mid + Vector3(0, -6.0, 0), 0.35)
+				fov = 66.0
+			else:
+				# ahead of him on the last roof, low: he pulls up short of the street
+				if not rr.has("end_cam"):
+					var q := _rr_at(minf(rr_s + 11.0, float(rr.len) - 0.5))
+					var qd := _rr_dir(rr_s)
+					rr.end_cam = Vector3(q.x, _rr_floor(q), q.y) + Vector3(-qd.y, 0.0, qd.x) * 1.4 + Vector3(0, 1.0, 0)
+				pos = rr.end_cam
+				look = hips + Vector3(0, 0.2, 0)
+				fov = 60.0
 		"wide":
 			var hp2 := Vector3(hide.x, 0.0, hide.y)
 			var mid3 := hp2.lerp(m.pos, 0.5)

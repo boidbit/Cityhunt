@@ -229,6 +229,8 @@ def main():
     caps = []
 
     def cap(text, t0, t1, size=140, y="h*0.14"):
+        # (a straight quote would end drawtext's quoted text: the typographic one reads the same)
+        text = text.replace("'", "\u2019")
         caps.append("drawtext=fontfile=%s:text='%s':fontsize=%d:fontcolor=white:borderw=8:bordercolor=black:"
                     "x=(w-text_w)/2:y=%s:enable='between(t,%.2f,%.2f)'" % (FONT, text, size, y, t0, t1))
 

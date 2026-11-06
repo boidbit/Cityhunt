@@ -75,5 +75,7 @@ All rights reserved. See [LICENSE](LICENSE). Third-party parts keep their own li
 - The Xbot rig and the brick/water textures come from the [three.js examples](https://github.com/mrdoob/three.js/tree/dev/examples) (MIT).
 - The Mercedes-Benz GLS 580 and Koenigsegg Agera models were supplied by the project owner (source files `uploads_files_2787791` and `uploads_files_2792345`), converted and simplified for the game. Car brand names and designs belong to their owners.
 - The Godot version's player character and his motion-captured animations come from [Microsoft Rocketbox](https://github.com/microsoft/microsoft-rocketbox) (MIT, see `godot/assets/player/LICENSE-rocketbox.txt`).
+- The Godot version's leaps are motion captured, from the [CMU Graphics Lab Motion Capture Database](http://mocap.cs.cmu.edu)
+  (free for all uses; the database was created with funding from NSF EIA-0196217), retargeted onto the player.
 - The Godot version's T-Rex is from the [Animated LowPoly Dinosaurs pack](https://quaternius.itch.io/animated-lowpoly-dinosaurs) by Quaternius (CC0, see `godot/assets/trex/License.txt`).
 - Fonts: Big Shoulders Display and Barlow (Google Fonts, OFL).

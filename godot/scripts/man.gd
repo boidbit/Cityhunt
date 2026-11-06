@@ -9,12 +9,14 @@
 class_name Man
 extends Node3D
 
-enum { IDLE, START, MOVE, STOP, TURN, CROUCH_IN, CROUCH, CROUCH_OUT }
+enum { IDLE, START, MOVE, STOP, TURN, CROUCH_IN, CROUCH, CROUCH_OUT, JUMP }
 
 const CYCLES := ["walk_slow", "walk", "walk_fast", "jog", "run", "sprint"]
 const FADE := 0.22
 const ANKLE_DOWN := 0.125       # ankle and toe heights (m) below which a foot is flat on the ground
 const TOE_DOWN := 0.025
+const ANKLE_REST := 0.102       # ankle and ball of the foot over the ground, standing at rest
+const BALL_REST := 0.002
 
 var model: Node3D
 var skel: Skeleton3D
@@ -44,7 +46,7 @@ var lean := Vector2()           # x: sideways into turns, y: forward with accele
 var step := 0                   # counts heel strikes (footstep sounds)
 var real_speed := 0.0           # ground speed after collisions, reported by PlayerCtl
 var legs: Array = []            # per leg: [thigh, calf, foot, toe] bone indices
-var locks: Array = []           # per leg: [point held (world), weight]
+var locks: Array = []           # per leg: [point held (world), weight, whether it is the ball of the foot (else the ankle)]
 var hold_gap := [0.0, 0.0]      # per leg: how far the clip's foot is from the point held (m)
 
 func _ready() -> void:
@@ -84,7 +86,7 @@ func _ready() -> void:
 		for part in ["Thigh", "Calf", "Foot", "Toe0"]:
 			leg.append(skel.find_bone("Bip01 %s %s" % [side, part]))
 		legs.append(leg)
-		locks.append([Vector3(), 0.0])
+		locks.append([Vector3(), 0.0, false])
 	_materials()
 	var mi: MeshInstance3D = skel.get_node("Body")
 	mi.extra_cull_margin = 2.0
@@ -202,6 +204,15 @@ func move(dt: float, dir: Vector2, want: float, crouch: bool, look := NAN) -> Ve
 				_to(CROUCH, 0.35)
 			elif ct >= _len(clip) - 0.3 or (go and ct > _len(clip) * 0.5):
 				_to(IDLE, 0.3)
+		JUMP:
+			d = _root_step(dt)
+			if ct >= _len(clip) - FADE:
+				var m: Dictionary = meta[clip]
+				speed = m.to_speed
+				phase = fposmod(m.to_phase - FADE * speed / _stride(speed), 1.0)
+				_to(MOVE, FADE)
+				# the clip fading out goes on from where it is now (_pose moves it on by this frame again)
+				tails[-1][1] -= dt
 	accel = lerpf(accel, (speed - prev_speed) / maxf(dt, 1e-4), 1.0 - exp(-dt / 0.15))
 	return d
 
@@ -210,6 +221,24 @@ func animate(dt: float) -> void:
 	_update_lean(dt)
 	_pose(dt)
 	_hold_feet(dt)
+
+## Leaps from a run: the jump clip ("gap_jump", motion captured) joins where the step he is in matches
+## its run-up, and the run takes over again as it ends. Returns the clip time it joined at.
+func jump(c := "gap_jump") -> float:
+	var entry: PackedFloat32Array = meta[c].entry
+	var t := entry[int(phase * entry.size()) % entry.size()]
+	_play(JUMP, c, 0.0, FADE)
+	ct = t
+	return t
+
+## The jump clip's time it would join at from a gait phase (see jump()).
+func jump_entry(p: float, c := "gap_jump") -> float:
+	var entry: PackedFloat32Array = meta[c].entry
+	return entry[int(fposmod(p, 1.0) * entry.size()) % entry.size()]
+
+## The hips in a clip at a time, in his own space (in place: add the root for where he has got to).
+func clip_hips(c: String, t: float) -> Vector3:
+	return (anims[c] as Animation).position_track_interpolate(htrack[c], t)
 
 func _start(want_yaw: float, want: float) -> void:
 	var a := angle_difference(yaw, want_yaw)
@@ -415,33 +444,65 @@ func _pose(dt: float) -> void:
 
 ## A foot flat on the ground stays where it landed: the leg is bent to reach it (two-bone IK) until
 ## the clip lifts the foot, then eased back to the clip.
+## A leap (a clip with a take-off) holds its own feet (they are fixed in the bake), so nothing is held
+## while it plays alone; while it blends with a run, a foot down at one end only (its heel, or the ball
+## of the foot as he lands or pushes off) is held by that end.
 func _hold_feet(dt: float) -> void:
 	var sg := skel.global_transform
 	var inv := sg.affine_inverse()
 	var ground := global_position.y
+	var leap := _leap_blend()
 	for i in 2:
 		var leg: Array = legs[i]
 		var L: Array = locks[i]
 		var foot := skel.get_bone_global_pose(leg[2])
 		var toe := skel.get_bone_global_pose(leg[3])
 		var fw := sg * foot.origin
-		var down := fw.y - ground < ANKLE_DOWN and (sg * toe.origin).y - ground < TOE_DOWN
+		var tw := sg * toe.origin
+		var down := fw.y - ground < ANKLE_DOWN and tw.y - ground < TOE_DOWN
+		var ball := false
+		if leap == 2:
+			var la := fw.y - ground - ANKLE_REST
+			var lb := tw.y - ground - BALL_REST
+			down = minf(la, lb) < 0.015
+			ball = lb < la - 0.01
+		elif leap == 1:
+			down = false
 		if down and state != TURN:
 			if L[1] <= 0.0:
-				L[0] = fw
+				L[0] = tw if ball else fw
+			elif L[2] != ball:
+				# rolled onto its other end: hold that one, where it is now with the hold so far
+				var was: Vector3 = tw if L[2] else fw
+				var by: Vector3 = (L[0] as Vector3) - was
+				by.y = 0.0
+				L[0] = (tw if ball else fw) + by * float(L[1])
+			L[2] = ball
 			L[1] = 1.0
 		else:
 			L[1] = maxf(0.0, L[1] - dt / 0.12)
 		if L[1] <= 0.0:
 			hold_gap[i] = 0.0
 			continue
+		var pt: Vector3 = tw if L[2] else fw
 		var held: Vector3 = L[0]
-		held.y = fw.y
-		hold_gap[i] = held.distance_to(fw) if down else 0.0
-		if held.distance_to(fw) > 0.3:
+		held.y = pt.y
+		hold_gap[i] = held.distance_to(pt) if down else 0.0
+		if held.distance_to(pt) > 0.3:
 			L[1] = 0.0
 			continue
-		_reach(leg, inv * fw.lerp(held, L[1]), foot.basis)
+		_reach(leg, inv * (fw + (pt.lerp(held, L[1]) - pt)), foot.basis)
+
+## 0: no leap showing, 1: a leap clip alone, 2: a leap blending with something else.
+func _leap_blend() -> int:
+	var tail := false
+	for T in tails:
+		if (meta[T[0]] as Dictionary).has("takeoff"):
+			tail = true
+	var on := state == JUMP
+	if on and tails.is_empty():
+		return 1
+	return 2 if on or tail else 0
 
 ## Bends a leg so its ankle reaches a point (skeleton space), the knee bending the way it bends now;
 ## the foot keeps its angle.

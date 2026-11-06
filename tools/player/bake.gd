@@ -10,7 +10,12 @@
 ## - once clips (starts, stops, turns, crouching down and up): the travel and turn per frame (root
 ##   motion), plus where they join a cycle
 ## - loop clips (idles): as captured
+## Rocketbox has no jumps, so those come from the CMU Graphics Lab Motion Capture Database
+## (mocap.cs.cmu.edu, free for all uses), retargeted onto the man (see read_cmu()):
+##   godot --headless --path tools/player -s res://bake.gd -- <rocketbox checkout> <folder of CMU .asf/.amc files>
 extends SceneTree
+
+const CMU := preload("res://cmu.gd")
 
 const AVATAR := "Assets/Avatars/Adults/Male_Adult_07/Export/Male_Adult_07.fbx"
 const ANIMS := "Assets/Animations/all_animations_max_motextr_%s/%s.max.fbx"
@@ -49,7 +54,45 @@ const CLIPS := {
 	"crouch_out": ["xy", "m_crouch_out", "once", {"trim": true}],
 }
 
+# CMU clips: name: [subject (its .asf), motion (its .amc), kind, options]. Sampled at 60 fps for slow
+# motion. "entry_until": the run-up a cycle may join it in (s).
+# - gap_jump: 127_25 "run jump over", a running leap off the left foot onto both feet, then a few steps on
+const CMU_CLIPS := {
+	"gap_jump": ["127", "127_25", "once", {"from": "run", "to": "run", "entry_until": 0.4}],
+}
+const CMU_FPS := 60.0
+# which of the actor's bones turns each of the man's, and the bone the man's is measured towards (none:
+# along the bone). Every other bone (fingers, face) keeps the pose it has at the start of the run.
+const CMU_MAP := {
+	"Bip01 Spine": ["lowerback", "Bip01 Spine1"],
+	"Bip01 Spine1": ["upperback", "Bip01 Spine2"],
+	"Bip01 Spine2": ["thorax", "Bip01 Neck"],
+	"Bip01 Neck": ["lowerneck", "Bip01 Head"],
+	"Bip01 Head": ["head"],
+	"Bip01 L Clavicle": ["lclavicle", "Bip01 L UpperArm"],
+	"Bip01 L UpperArm": ["lhumerus", "Bip01 L Forearm"],
+	"Bip01 L Forearm": ["lradius", "Bip01 L Hand"],
+	"Bip01 L Hand": ["lhand", "Bip01 L Finger2"],
+	"Bip01 R Clavicle": ["rclavicle", "Bip01 R UpperArm"],
+	"Bip01 R UpperArm": ["rhumerus", "Bip01 R Forearm"],
+	"Bip01 R Forearm": ["rradius", "Bip01 R Hand"],
+	"Bip01 R Hand": ["rhand", "Bip01 R Finger2"],
+	"Bip01 L Thigh": ["lfemur", "Bip01 L Calf"],
+	"Bip01 L Calf": ["ltibia", "Bip01 L Foot"],
+	"Bip01 L Foot": ["lfoot", "Bip01 L Toe0"],
+	"Bip01 L Toe0": ["ltoes"],
+	"Bip01 R Thigh": ["rfemur", "Bip01 R Calf"],
+	"Bip01 R Calf": ["rtibia", "Bip01 R Foot"],
+	"Bip01 R Foot": ["rfoot", "Bip01 R Toe0"],
+	"Bip01 R Toe0": ["rtoes"],
+}
+# a foot is on the ground while its ankle and its toe are this close to it (m)
+const ANKLE_REST := 0.102     # the ankle and the ball of the foot over the floor, standing at rest
+const BALL_REST := 0.002
+const CONTACT := 0.03
+
 var rb := ""
+var cmu := ""
 var sk: Skeleton3D
 var nb := 0
 var rest: Array[Transform3D] = []
@@ -66,14 +109,17 @@ class Clip:
 	var hips: Array = []      # [frame] -> Vector3 (Bip01, in place)
 	var root: Array = []      # [frame] -> Vector3(x, z, yaw)
 	var tracked: Array = []   # bone indices the capture animates
+	var fps := FPS            # frames a second
+	var extra := {}           # more for the clip's metadata
 
 func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
-	if args.is_empty():
-		push_error("usage: -- <rocketbox checkout>")
+	if args.size() < 2:
+		push_error("usage: -- <rocketbox checkout> <folder of CMU .asf/.amc files>")
 		quit(1)
 		return
 	rb = args[0]
+	cmu = args[1]
 	var av := load_fbx(rb.path_join(AVATAR))
 	sk = av.find_children("*", "Skeleton3D", true, false)[0]
 	nb = sk.get_bone_count()
@@ -83,44 +129,58 @@ func _initialize() -> void:
 	lfoot = sk.find_bone("Bip01 L Foot")
 	rfoot = sk.find_bone("Bip01 R Foot")
 	var clips := {}
+	var opts := {}
 	for name in CLIPS:
 		var c: Array = CLIPS[name]
-		clips[name] = read_clip(name, c[0], c[1], c[2], c[3] if c.size() > 3 else {})
+		opts[name] = c[3] if c.size() > 3 else {}
+		clips[name] = read_clip(name, c[0], c[1], c[2], opts[name])
 	var meta := {}
 	var lib := AnimationLibrary.new()
 	for name in clips:
 		var c: Clip = clips[name]
-		var opt: Dictionary = CLIPS[name][3] if CLIPS[name].size() > 3 else {}
 		var m := {"kind": c.kind, "len": c.length}
 		if c.kind == "cycle":
 			m.merge(make_cycle(c))
 		elif c.kind == "loop":
 			seal_loop(c)
-		if c.kind == "once":
-			var r := PackedFloat32Array()
-			for v in c.root:
-				r.append_array([v.x, v.y, v.z])
-			m.root = r
 		meta[name] = m
+	# the CMU clips borrow the hands and face of the run as it starts
+	for name in CMU_CLIPS:
+		var c: Array = CMU_CLIPS[name]
+		opts[name] = c[3]
+		clips[name] = read_cmu(name, c[0], c[1], c[2], clips.run.rot[0])
+		meta[name] = {"kind": c[2], "len": clips[name].length}
+		meta[name].merge(clips[name].extra)
+	for name in clips:
+		var c: Clip = clips[name]
+		if c.kind == "once":
+			# the root is read at 30 frames a second (Man._root)
+			var r := PackedFloat32Array()
+			var every := int(round(c.fps / FPS))
+			for k in range(0, c.root.size(), every):
+				var v: Vector3 = c.root[k]
+				r.append_array([v.x, v.y, v.z])
+			meta[name].root = r
 	clips.crouch_walk = crouch_walk(clips.walk)
 	meta.crouch_walk = {"kind": "cycle", "len": 1.0, "speed": meta.walk.speed * CROUCH_STRIDE, "stride": meta.walk.stride * CROUCH_STRIDE, "cycle": meta.walk.cycle, "r_phase": meta.walk.r_phase}
 	# where the once clips meet the cycles (after the cycles are final)
 	for name in clips:
 		var c: Clip = clips[name]
-		var opt: Dictionary = CLIPS[name][3] if CLIPS.has(name) and CLIPS[name].size() > 3 else {}
+		var opt: Dictionary = opts.get(name, {})
 		if opt.has("to"):
 			var cyc: Clip = clips[opt.to]
 			meta[name].to = opt.to
 			meta[name].to_phase = best_phase(cyc, features(c, c.rot.size() - 1))
 			# its speed as it ends: a straight line through the last third of a second
 			var k := c.root.size() - 1
-			var a: Vector3 = c.root[k - 10]
+			var j := int(round(c.fps / 3.0))
+			var a: Vector3 = c.root[k - j]
 			var b: Vector3 = c.root[k]
-			meta[name].to_speed = Vector2(b.x - a.x, b.y - a.y).length() / (10.0 / FPS)
+			meta[name].to_speed = Vector2(b.x - a.x, b.y - a.y).length() / (j / c.fps)
 		if opt.has("from"):
 			var cyc: Clip = clips[opt.from]
 			var entry := PackedFloat32Array()
-			var last := int(c.rot.size() * 0.45)
+			var last := int(opt.entry_until * c.fps) if opt.has("entry_until") else int(c.rot.size() * 0.45)
 			for i in 24:
 				var f := cycle_features(cyc, i / 24.0)
 				var best := 0
@@ -130,7 +190,7 @@ func _initialize() -> void:
 					if d < bd:
 						bd = d
 						best = k
-				entry.append(best / FPS)
+				entry.append(best / c.fps)
 			meta[name].from = opt.from
 			meta[name].entry = entry
 	for name in clips:
@@ -212,6 +272,272 @@ func read_clip(name: String, folder: String, file: String, kind: String, opt: Di
 	if opt.get("trim", false):
 		trim(c)
 	return c
+
+## A CMU clip retargeted onto the man. Each bone in CMU_MAP turns, in the capture's space, the way the
+## actor's bone turns from its rest pose. The two rest poses differ (the actor stands in a T with his
+## legs apart, the man in an A), so each of the man's bones is first swung onto the actor's rest
+## direction. His hip joints go where the actor's go, scaled by the length of their legs. Then the
+## capture is turned to travel along +z, the root is the hips' path over the ground smoothed over about
+## a step (the sway stays in the hips), the floor is put under his feet and a foot that would still go
+## through it is lifted (two-bone IK). The metadata gets when he takes off and lands.
+## base: local rotations for the bones the capture doesn't drive (hands, face).
+func read_cmu(name: String, subject: String, motion: String, kind: String, base: Array) -> Clip:
+	var m := CMU.new()
+	m.load_asf(cmu.path_join(subject + ".asf"))
+	m.load_amc(cmu.path_join(motion + ".amc"))
+	var grest: Array[Transform3D] = []
+	for b in nb:
+		var par := sk.get_bone_parent(b)
+		var l := Transform3D(rest[b].basis.orthonormalized(), rest[b].origin)
+		grest.append(grest[par] * l if par >= 0 else l)
+	var src := {}
+	var align := {}
+	for bn in CMU_MAP:
+		var b := sk.find_bone(bn)
+		assert(b >= 0, "no bone " + bn)
+		var e: Array = CMU_MAP[bn]
+		var d: Vector3 = grest[sk.find_bone(e[1])].origin - grest[b].origin if e.size() > 1 else grest[b].basis.x
+		src[b] = e[0]
+		align[b] = Basis(Quaternion(d.normalized(), m.dir[e[0]]))
+	var pelvis := sk.find_bone("Bip01 Pelvis")
+	var thighs := [sk.find_bone("Bip01 L Thigh"), sk.find_bone("Bip01 R Thigh")]
+	var s: float = (rest[sk.find_bone("Bip01 L Calf")].origin.length() + rest[lfoot].origin.length()) / (m.length.lfemur + m.length.ltibia)
+	var step := m.fps / CMU_FPS
+	var n := int(floor((m.frames.size() - 1) / step))
+	var a0: Dictionary = m.pose(0)
+	var a1: Dictionary = m.pose(n * step)
+	var trav: Vector3 = a1.at.root - a0.at.root
+	var W := Basis(Vector3.UP, atan2(trav.x, trav.z)).inverse()
+	var start := Vector3(a0.at.root.x, 0.0, a0.at.root.z)
+	var c := Clip.new()
+	c.name = name
+	c.kind = kind
+	c.fps = CMU_FPS
+	c.tracked.assign(range(nb))
+	var raw: Array[Vector3] = []
+	for k in n + 1:
+		var P := m.pose(k * step)
+		var g: Array[Basis] = []
+		var q: Array[Quaternion] = []
+		for b in nb:
+			var par := sk.get_bone_parent(b)
+			var gb: Basis
+			if b <= pelvis:
+				gb = W * (P.rot.root as Basis) * grest[b].basis
+			elif src.has(b):
+				gb = W * (P.rot[src[b]] as Basis) * (align[b] as Basis) * grest[b].basis
+			else:
+				gb = g[par] * Basis(base[b] as Quaternion)
+			gb = gb.orthonormalized()
+			g.append(gb)
+			q.append((g[par].inverse() * gb).get_rotation_quaternion() if par >= 0 else gb.get_rotation_quaternion())
+		# his hip joints (with Bip01 at the origin) onto the actor's
+		var at: Array[Vector3] = []
+		for b in nb:
+			var par := sk.get_bone_parent(b)
+			at.append(at[par] + g[par] * rest[b].origin if par >= 0 else Vector3.ZERO)
+		var mid: Vector3 = (at[thighs[0]] + at[thighs[1]]) * 0.5
+		var hj: Vector3 = W * (((P.at.lfemur as Vector3) + (P.at.rfemur as Vector3)) * 0.5 - start) * s
+		raw.append(hj - mid)
+		c.rot.append(q)
+	# the root: the hips' path over the ground, smoothed (past the ends it carries straight on)
+	var sig := 0.12 * c.fps
+	var r := int(ceil(sig * 3.0))
+	var path: Array[Vector2] = []
+	for k in n + 1:
+		var acc := Vector2()
+		var ws := 0.0
+		for j in range(k - r, k + r + 1):
+			var p := Vector2(raw[clampi(j, 0, n)].x, raw[clampi(j, 0, n)].z)
+			if j < 0:
+				p = Vector2(raw[0].x, raw[0].z) * 2.0 - Vector2(raw[mini(-j, n)].x, raw[mini(-j, n)].z)
+			elif j > n:
+				p = Vector2(raw[n].x, raw[n].z) * 2.0 - Vector2(raw[maxi(2 * n - j, 0)].x, raw[maxi(2 * n - j, 0)].z)
+			var w := exp(-0.5 * pow((j - k) / sig, 2.0))
+			acc += p * w
+			ws += w
+		path.append(acc / ws)
+	for k in n + 1:
+		var p := path[k] - path[0]
+		c.root.append(Vector3(p.x, p.y, 0.0))
+		c.hips.append(raw[k] - Vector3(path[k].x, 0.0, path[k].y))
+	c.length = n / c.fps
+	var floor_y := _cmu_floor(c)
+	for k in n + 1:
+		c.hips[k] -= Vector3(0.0, floor_y, 0.0)
+	var lifted := _cmu_keep_above_floor(c)
+	var held := _cmu_lock_feet(c)
+	c.extra = _cmu_flight(c)
+	print("%s: CMU %s, scale %.3f, turned %.0f deg, floor %.3f m, %d feet lifted (most %.3f m), feet held (most %.3f m), %s" % [name, motion, s, rad_to_deg(atan2(trav.x, trav.z)), floor_y, lifted[0], lifted[1], held, str(c.extra)])
+	return c
+
+## How low a foot is: its ankle and the ball of the foot over the floor, against the rest pose.
+func _foot_low(g: Array[Transform3D], foot: int) -> float:
+	var toe := lfoot + 1 if foot == lfoot else rfoot + 1
+	return minf(g[foot].origin.y - ANKLE_REST, g[toe].origin.y - BALL_REST)
+
+## The floor of the capture: the height the lower foot is at most of the time.
+func _cmu_floor(c: Clip) -> float:
+	var lows: Array[float] = []
+	for k in c.rot.size():
+		var g := pose(c, k)
+		lows.append(minf(_foot_low(g, lfoot), _foot_low(g, rfoot)))
+	var sorted := lows.duplicate()
+	sorted.sort()
+	return sorted[int(sorted.size() * 0.3)]
+
+## Lifts a foot that goes through the floor (bending the leg), returns [how many, the most lifted].
+func _cmu_keep_above_floor(c: Clip) -> Array:
+	var count := 0
+	var most := 0.0
+	for k in c.rot.size():
+		for foot in [lfoot, rfoot]:
+			var g := pose(c, k)
+			var low := _foot_low(g, foot)
+			if low >= 0.0:
+				continue
+			count += 1
+			most = maxf(most, -low)
+			_leg_to(c, k, foot, g[foot].origin + Vector3(0.0, -low, 0.0))
+	return [count, most]
+
+## Bends a leg of frame k (two-bone IK) so the ankle reaches target (root space), the knee bending the
+## way it bends, the foot keeping its angle.
+func _leg_to(c: Clip, k: int, foot: int, target: Vector3) -> void:
+	var g := pose(c, k)
+	var calf := sk.get_bone_parent(foot)
+	var thigh := sk.get_bone_parent(calf)
+	var h := g[thigh].origin
+	var l1 := h.distance_to(g[calf].origin)
+	var l2 := g[calf].origin.distance_to(g[foot].origin)
+	var d := clampf(h.distance_to(target), absf(l1 - l2) + 0.01, l1 + l2 - 0.002)
+	var u := (target - h).normalized()
+	var pole: Vector3 = g[calf].origin - (h + g[foot].origin) * 0.5
+	pole = (pole - u * pole.dot(u)).normalized()
+	var along := (l1 * l1 - l2 * l2 + d * d) / (2.0 * d)
+	var knee := h + u * along + pole * sqrt(maxf(l1 * l1 - along * along, 0.0))
+	var foot_basis := g[foot].basis
+	var gt := g[thigh]
+	gt.basis = Basis(Quaternion((g[calf].origin - h).normalized(), (knee - h).normalized())) * gt.basis
+	var gc := Transform3D(gt.basis * Basis(c.rot[k][calf]), gt * rest[calf].origin)
+	var ankle := gc * rest[foot].origin
+	gc.basis = Basis(Quaternion((ankle - gc.origin).normalized(), (target - gc.origin).normalized())) * gc.basis
+	var gp := g[sk.get_bone_parent(thigh)]
+	c.rot[k][thigh] = (gp.basis.inverse() * gt.basis).get_rotation_quaternion()
+	c.rot[k][calf] = (gt.basis.inverse() * gc.basis).get_rotation_quaternion()
+	c.rot[k][foot] = (gc.basis.inverse() * foot_basis).get_rotation_quaternion()
+
+## A foot on the ground stays where it is. The man's legs are not the actor's (the thigh, shin and foot in
+## other proportions), so where the actor's foot stood still, the man's slides a little. While a foot is
+## down, the point it stands on (the heel, then the ball as it rolls forward) is held where it touched,
+## easing in and out over a few frames; the leg bends to reach it. Returns the largest correction (m).
+func _cmu_lock_feet(c: Clip) -> float:
+	var n := c.rot.size()
+	var ease := 4
+	var most := 0.0
+	for foot in [lfoot, rfoot]:
+		var toe: int = foot + 1
+		var A: Array[Vector3] = []
+		var B: Array[Vector3] = []
+		var down: Array[bool] = []
+		var on_ball: Array[bool] = []
+		for k in n:
+			var g := pose(c, k)
+			var ro := Vector3(c.root[k].x, 0.0, c.root[k].y)
+			A.append(g[foot].origin + ro)
+			B.append(g[toe].origin + ro)
+			var la := A[k].y - ANKLE_REST
+			var lb := B[k].y - BALL_REST
+			down.append(minf(la, lb) < CONTACT)
+			on_ball.append(lb < la - 0.01)
+		# down means near the floor and slow: a foot swinging low past it moves at twice his speed or more,
+		# one landing may still skid a little as it touches (that is what is held)
+		for k in n:
+			var P: Array[Vector3] = B if on_ball[k] else A
+			var a := P[maxi(k - 1, 0)]
+			var b := P[mini(k + 1, n - 1)]
+			var v := Vector2(b.x - a.x, b.z - a.z).length() / (float(mini(k + 1, n - 1) - maxi(k - 1, 0)) / c.fps)
+			down[k] = down[k] and v < 2.2
+		# the shift of the foot (x, z) that holds its point down, frame by frame
+		var shift: Array[Vector3] = []
+		shift.resize(n)
+		shift.fill(Vector3.ZERO)
+		var k := 0
+		while k < n:
+			if not down[k]:
+				k += 1
+				continue
+			var j := k
+			while j < n and down[j]:
+				j += 1
+			if j - k >= 3:
+				print("  %s down %.2f-%.2f s on its %s" % ["L" if foot == lfoot else "R", k / c.fps, j / c.fps, "ball" if on_ball[k] else "heel"])
+				var ball := on_ball[k]
+				var lock: Vector3 = B[k] if ball else A[k]
+				var prev := Vector3.ZERO
+				for i in range(k, j):
+					if on_ball[i] != ball:
+						# rolled onto the other point: hold that one where it is now (with the shift so far)
+						ball = on_ball[i]
+						lock = (B[i] if ball else A[i]) + prev
+					var p: Vector3 = B[i] if ball else A[i]
+					var s := Vector3(lock.x - p.x, 0.0, lock.z - p.z)
+					# (it starts with no shift anyway; let go of it over a few frames as it lifts)
+					var w := minf(1.0, float(j - i) / ease)
+					shift[i] = s * w
+					prev = s
+			k = j
+		for i in n:
+			if shift[i].length() < 1e-4:
+				continue
+			most = maxf(most, shift[i].length())
+			var g := pose(c, i)
+			_leg_to(c, i, foot, g[foot].origin + shift[i])
+	return most
+
+## When he leaves the ground and lands (the longest time both feet are up), which foot pushes off,
+## and where the feet are then (root space, metres along +z).
+func _cmu_flight(c: Clip) -> Dictionary:
+	var n := c.rot.size()
+	var up: Array[bool] = []
+	var down_l: Array[bool] = []
+	for k in n:
+		var g := pose(c, k)
+		down_l.append(_foot_low(g, lfoot) < CONTACT)
+		up.append(_foot_low(g, lfoot) >= CONTACT and _foot_low(g, rfoot) >= CONTACT)
+	var a := 0
+	var b := 0
+	var k := 0
+	while k < n:
+		if up[k]:
+			var j := k
+			while j < n and up[j]:
+				j += 1
+			if j - k > b - a:
+				a = k
+				b = j
+			k = j
+		else:
+			k += 1
+	var g0 := pose(c, a - 1)
+	var g1 := pose(c, b)
+	var push := lfoot if down_l[a - 1] else rfoot
+	var r0: Vector3 = c.root[a - 1]
+	var r1: Vector3 = c.root[b]
+	return {
+		"takeoff": (a - 1) / c.fps, "land": b / c.fps,
+		"push": "L" if push == lfoot else "R",
+		# the toe that pushes off and the heels it lands on, along the way he goes
+		"push_toe": r0.y + g0[push + 1].origin.z,
+		"land_heel": r1.y + minf(g1[lfoot].origin.z, g1[rfoot].origin.z),
+		"rise": _max_hips(c, a, b) - (c.hips[a - 1] as Vector3).y,
+	}
+
+func _max_hips(c: Clip, a: int, b: int) -> float:
+	var y := -INF
+	for k in range(a, b):
+		y = maxf(y, (c.hips[k] as Vector3).y)
+	return y
 
 ## Cuts the long still start and end off a crouch clip (they are 4.5 s, the move itself is ~1.5 s).
 func trim(c: Clip) -> void:
@@ -382,8 +708,7 @@ func features(c: Clip, k: int) -> PackedFloat32Array:
 	var k1 := k2 - 1
 	var g1 := pose(c, k1)
 	var g2 := pose(c, k2)
-	var dt := (1.0 / FPS) * (1.0 if c.kind != "cycle" else 1.0)
-	return feat(g1, g2, dt)
+	return feat(g1, g2, 1.0 / c.fps)
 
 func cycle_features(c: Clip, phase: float) -> PackedFloat32Array:
 	# a cycle is stretched to 1 s: its frames are phase * (frames), and a frame lasts cycle/frames
@@ -423,6 +748,8 @@ func to_animation(c: Clip) -> Animation:
 	var dt := c.length / n
 	var t := an.add_track(Animation.TYPE_POSITION_3D)
 	an.track_set_path(t, "Skeleton3D:" + sk.get_bone_name(0))
+	if c.fps > FPS:
+		an.track_set_interpolation_type(t, Animation.INTERPOLATION_CUBIC)
 	for k in n + 1:
 		an.position_track_insert_key(t, k * dt, c.hips[k])
 	for b in c.tracked:
@@ -440,6 +767,9 @@ func to_animation(c: Clip) -> Animation:
 			continue
 		t = an.add_track(Animation.TYPE_ROTATION_3D)
 		an.track_set_path(t, "Skeleton3D:" + sk.get_bone_name(b))
+		if c.fps > FPS:
+			# played slowed down (slow motion): smooth between the keys
+			an.track_set_interpolation_type(t, Animation.INTERPOLATION_CUBIC)
 		if still:
 			an.rotation_track_insert_key(t, 0.0, c.rot[0][b])
 			continue

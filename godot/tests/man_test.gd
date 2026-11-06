@@ -68,6 +68,20 @@ func _feet(dt: float) -> void:
 		s[2] = maxf(s[2], maxf(man.hold_gap[0], man.hold_gap[1]))
 		slip[label] = s
 
+## How low his feet are: the lowest of either foot's ankle and ball over their heights standing at rest, and
+## per foot [that height, the point that is lowest, [ankle, ball]].
+func _feet_low() -> Array:
+	var lo := INF
+	var per := []
+	for side in ["L", "R"]:
+		var a := man.bone_pos("Bip01 %s Foot" % side)
+		var b := man.bone_pos("Bip01 %s Toe0" % side)
+		var ha := a.y - 0.102
+		var hb := b.y - 0.002
+		per.append([minf(ha, hb), a if ha < hb else b, [a, b]])
+		lo = minf(lo, minf(ha, hb))
+	return [lo, per]
+
 func run_for(secs: float, heading: float, want: float, crouch := false) -> void:
 	var n := int(secs * HZ)
 	for i in n:
@@ -155,15 +169,59 @@ func _process(_d: float) -> bool:
 	run_for(2.0, 0.0, 0.0, true)
 	run_for(3.5, 0.0, 0.0, false)
 	check(man.state == Man.IDLE, "stands up again")
+	# a leap from a run (the motion-captured gap_jump): off one foot, both feet up, down on both, running on
+	run_for(3.0, 0.0, 3.07)
+	var run_low := INF
+	for i in int(HZ):
+		frame(0.0, 3.07)
+		run_low = minf(run_low, _feet_low()[0])
+	var entry := man.jump()
+	check(man.state == Man.JUMP and entry < 0.4, "leaps from a run (joins the clip's run-up at %.2f s)" % entry)
+	var jm: Dictionary = man.meta.gap_jump
+	var up_t := 0.0
+	var clear := 0.0
+	var lowest := INF
+	var low_at := 0.0
+	var slide := [0.0, 0]
+	var last_pt := [[], []]
+	var leap_t0 := t
+	while man.state == Man.JUMP and t - leap_t0 < 3.0:
+		frame(0.0, 3.07)
+		var fl := _feet_low()
+		if fl[0] < lowest:
+			lowest = fl[0]
+			low_at = man.ct
+		clear = maxf(clear, fl[0])
+		if fl[0] > 0.05:
+			up_t += 1.0 / HZ
+		# after landing, a foot on the ground (heel or ball down: he lands on the balls of his feet) should
+		# not slide: as it rolls one of the two stays put, so the slower of them
+		for i in 2:
+			var low: Array = fl[1][i]
+			var pts: Array = low[2]
+			if man.ct > float(jm.land) and low[0] < 0.012 and not (last_pt[i] as Array).is_empty():
+				var va := Vector2(pts[0].x - last_pt[i][0].x, pts[0].z - last_pt[i][0].z).length()
+				var vb := Vector2(pts[1].x - last_pt[i][1].x, pts[1].z - last_pt[i][1].z).length()
+				slide[0] += minf(va, vb) * HZ
+				slide[1] += 1
+			last_pt[i] = pts if low[0] < 0.012 else []
+	check(up_t > 0.35 and up_t < 0.9, "both feet leave the ground for %.2f s" % up_t)
+	check(clear > 0.3, "and clear it by %.2f m at the top" % clear)
+	check(lowest > run_low - 0.015, "no foot goes further into the ground than in the run (%.3f m at %.2f s in the clip; the run %.3f m)" % [lowest, low_at, run_low])
+	var sv: float = slide[0] / maxf(slide[1], 1)
+	check(sv < 0.15 and slide[1] > 15, "he lands on his feet: a foot on the ground slides %.2f m/s on average (%d frames)" % [sv, slide[1]])
+	check(man.state == Man.MOVE and man.speed > 2.0, "lands and runs on (%.1f m/s)" % man.speed)
+	run_for(2.0, 0.0, 0.0)
 	# the feet
 	# held by the leg IK: the slide left is ~0; how far the clip itself drifted shows the gait
 	# matches the ground speed (the IK only takes up a few centimetres)
 	var limits := {"walk": 0.15, "run": 0.3, "sprint": 0.5, "crouch walk": 0.15}
 	var drift := {"walk": 0.04, "run": 0.08, "sprint": 0.12, "crouch walk": 0.05}
+	var doing := {"walk": "walking", "run": "running", "sprint": "sprinting", "crouch walk": "sneaking"}
 	for k in limits:
 		var s: Array = slip.get(k, [0.0, 1, 0.0])
 		var v: float = s[0] / maxf(s[1], 1)
-		check(v < limits[k] and s[1] > 15, "feet stay planted while %s: a foot on the ground slides %.2f m/s on average (%d frames on the ground)" % ["sneaking" if k == "crouch walk" else k + "ing" if k != "run" else "running", v, s[1]])
+		check(v < limits[k] and s[1] > 15, "feet stay planted while %s: a foot on the ground slides %.2f m/s on average (%d frames on the ground)" % [doing[k], v, s[1]])
 		check(s[2] < drift[k], "  the leg holds it at most %.1f cm from where the clip would put it" % (s[2] * 100.0))
 	print("DONE fails=%d" % fails)
 	quit(1 if fails > 0 else 0)

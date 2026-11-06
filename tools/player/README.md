@@ -3,7 +3,7 @@
 Makes the Godot version's player (`godot/assets/player/`) from Microsoft Rocketbox
 (https://github.com/microsoft/microsoft-rocketbox, MIT licence, see
 `godot/assets/player/LICENSE-rocketbox.txt`): the man `Male_Adult_07` and his motion-captured
-walks, runs, starts, stops, turns and crouching.
+walks, runs, starts, stops, turns and crouching, plus a running leap from the CMU motion capture database.
 
 Only needed to change the character or his clips; the baked files are in the repo.
 
@@ -18,11 +18,27 @@ git checkout HEAD -- Assets/Avatars/Adults/Male_Adult_07 \
   $(git ls-tree -r --name-only HEAD Assets/Animations | grep -E '/(m_idle_neutral_01|m_walk_|m_run_|m_turn_|m_crouch_)')
 ```
 
-## 2. Bake
+## 2. Get the CMU jumps
+
+Rocketbox has no jumps, so those come from the [CMU Graphics Lab Motion Capture
+Database](http://mocap.cs.cmu.edu) ("free for all uses"): subject 127's skeleton and the motions listed
+in `CMU_CLIPS` in `bake.gd` (`127_25`, "run jump over", for `gap_jump`):
+
+```
+mkdir cmu && cd cmu
+curl -O http://mocap.cs.cmu.edu/subjects/127/127.asf
+curl -O http://mocap.cs.cmu.edu/subjects/127/127_25.amc
+```
+
+`bake.gd` retargets them onto the man (`read_cmu()`): every bone turns the way the actor's does, from
+the actor's rest pose (a T) brought onto the man's (an A), his hips go where the actor's go scaled by
+leg length, and the floor is put under his feet. Their metadata also says when he takes off and lands.
+
+## 3. Bake
 
 ```
 python3 tools/player/make_textures.py <path to microsoft-rocketbox>   # needs numpy and Pillow
-godot --headless --path tools/player -s res://bake.gd -- <path to microsoft-rocketbox>
+godot --headless --path tools/player -s res://bake.gd -- <path to microsoft-rocketbox> <path to cmu>
 ```
 
 `make_textures.py` writes the colour, normal, roughness and hair textures. `bake.gd` (Godot 4.6)

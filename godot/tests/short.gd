@@ -8,6 +8,7 @@
 ## --mode=hunter    he goes after the T-Rex: rams it, backs off, rams it again, and it goes down
 ## --mode=domino    the T-Rex charges down a street of parked cars, throwing them aside one after another
 ## --mode=freeze    he hides beside a car while it walks up, sniffs about a few metres off and walks on
+## --mode=gapjump   he runs over a roof and leaps the alley onto the next, lower roof (slow motion in the air)
 ## --seed=N         where in the city it happens (and the small random choices)
 ## --fps=N          frames recorded a second (the same as Godot's --fixed-fps); compose.py blends them into motion blur
 ## Do not call a flag --shot, --frames, --day, --play, --loc or --stats: the game itself reads those (--shot=x quits it after 60 frames).
@@ -95,6 +96,20 @@ var cam_l := Vector3()
 var last_mode := ""
 var hero_until := -1.0
 
+# gapjump: a man of the director's own (the player stays out of the shot), leaping from roof to roof
+const GJ_DROP_MIN := 1.2      # the far roof at least this much lower (m): off level ground the leap clears ~1.6 m
+const GJ_DROP_MAX := 3.8
+const GJ_RUNUP := 2.2         # seconds of running before the leap starts
+const GJ_SLOW := 0.3          # time scale while he is in the air
+const GRAV := 9.81
+var man: Man = null
+var gj := {}                  # the roofs, the line across them and the leap worked out (setup_gapjump)
+var gj_mode := ""             # run, jump (the clip's run-up), air, down (landed: the clip plays on), on (running on)
+var gj_air := 0.0             # seconds in the air
+var gj_down := 0.0            # seconds since he landed
+var gj_steps := 0
+var gj_run := 0.0             # seconds he has been running
+
 ## Runs after the game's own _process (higher priority number = later): puts the car and the creature where the
 ## shot wants them and takes the camera over.
 class Rig extends Node:
@@ -156,6 +171,8 @@ func _process(dt: float) -> bool:
 			step_nearmiss(t, dt)
 		"freeze":
 			step_freeze(t)
+		"gapjump":
+			step_gapjump(t)
 		_:
 			step_flip(t, dt)
 	if walk:
@@ -190,6 +207,10 @@ func after_game(dt: float) -> void:
 	place_rex()
 	if recipe == "domino" or (recipe == "flip" and not car_free):
 		g.pl.actor.visible = false
+	if recipe == "gapjump":
+		g.pl.actor.visible = false
+		g.mon.actor.visible = false
+		drive_man(dt)
 	if downed:
 		# it stays down: the death clip held on its last frame
 		var a: Rex = g.mon.actor
@@ -287,6 +308,8 @@ func setup() -> void:
 			setup_domino()
 		"freeze":
 			setup_freeze()
+		"gapjump":
+			setup_gapjump()
 		_:
 			setup_chase(p)
 	print("shot %s, seed %d, player at %s, creature at %s" % [recipe, seed_n, Vector2(g.pl.pos.x, g.pl.pos.z).round(), Vector2(g.mon.pos.x, g.mon.pos.z).round()])
@@ -1137,12 +1160,418 @@ func step_freeze(t: float) -> void:
 		if d > 26.0 or rs >= poly_len(rpath) - 0.5:
 			end_after(t, 1.5)
 
+# ---------------------------------------------------------------- gapjump: roof to roof
+## The leap: two roofs across an alley (1.6 to 2.8 m between their cornices), the far one 1.2 to 3.8 m lower,
+## side by side for 7 m or more, and a line across both clear of whatever stands on them (water towers, vents,
+## a top storey set back), picked by the seed. He comes running and takes off with his toes at the edge:
+## the shot starts mid-stride, GJ_RUNUP seconds before the leap.
+## The leap itself is motion captured (the "gap_jump" clip, see tools/player/bake.gd). Off level ground it
+## clears ~1.6 m, so the far roof is lower: in the air the clip is slowed (most at the top of the leap) to
+## last as long as the drop takes, while his hips fly the true arc under gravity (drive_man()).
+func setup_gapjump() -> void:
+	var tris := roof_tris()
+	var roofs: Array = []
+	for c in g.world.col:
+		if float(c[2]) == 0.0 and float(c[3]) >= 10.0 and int(c[6]) == 3:
+			roofs.append(c)
+	var on := {}      # roof index -> the triangles above it
+	for i in roofs.size():
+		on[i] = tris_over(tris, roofs[i])
+	var opts := []
+	for i in roofs.size():
+		for j in roofs.size():
+			var a: Array = roofs[i]
+			var b: Array = roofs[j]
+			var drop := float(a[3]) - float(b[3])
+			if i == j or drop < GJ_DROP_MIN or drop > GJ_DROP_MAX:
+				continue
+			for axis in 2:
+				var lo := 0 if axis == 0 else 4     # along the leap
+				var cl := 4 if axis == 0 else 0     # across it
+				for sgn in [1.0, -1.0]:
+					var gap: float = (float(b[lo]) - float(a[lo + 1])) if sgn > 0.0 else (float(a[lo]) - float(b[lo + 1]))
+					if gap < 2.2 or gap > 3.4:
+						continue
+					var c0 := maxf(a[cl], b[cl])
+					var c1 := minf(a[cl + 1], b[cl + 1])
+					var room_a: float = float(a[lo + 1]) - float(a[lo])
+					var room_b: float = float(b[lo + 1]) - float(b[lo])
+					var run := GJ_RUNUP * 3.1 + 1.5
+					if c1 - c0 < 7.0 or room_a < run + 0.5 or room_b < 6.0:
+						continue
+					# the cornices stand 0.3 m out from the walls
+					var ea: float = (float(a[lo + 1]) + 0.3) if sgn > 0.0 else (float(a[lo]) - 0.3)
+					var eb: float = (float(b[lo]) - 0.3) if sgn > 0.0 else (float(b[lo + 1]) + 0.3)
+					var d := Vector2(sgn, 0.0) if axis == 0 else Vector2(0.0, sgn)
+					# across: the clear line nearest the middle
+					var best := INF
+					var pick := 0.0
+					var w := c0 + 1.5
+					while w <= c1 - 1.5:
+						var e := Vector2(ea, w) if axis == 0 else Vector2(w, ea)
+						var f := Vector2(eb, w) if axis == 0 else Vector2(w, eb)
+						if not blocked(on[i], float(a[3]), e - d * run, e) and not blocked(on[j], float(b[3]), f, f + d * 6.0):
+							var mid := absf(w - (c0 + c1) * 0.5)
+							if mid < best:
+								best = mid
+								pick = w
+						w += 0.5
+					if best == INF:
+						continue
+					var edge := Vector2(ea, pick) if axis == 0 else Vector2(pick, ea)
+					opts.append({"a": a, "b": b, "d": d, "edge": edge, "gap": absf(eb - ea), "ha": float(a[3]), "hb": float(b[3]),
+						"room_b": room_b})
+	print("gapjump: %d clear leaps over %d roofs (%d triangles above roofs)" % [opts.size(), roofs.size(), tris.size()])
+	if opts.is_empty():
+		push_error("gapjump: no roofs to leap between")
+		quit(1)
+		return
+	gj = opts[randi() % opts.size()]
+	dress_roofs(tris, roofs)
+	# the cameras stand on the side of the line with less on the roofs
+	var dd: Vector2 = gj.d
+	var nn := Vector2(-dd.y, dd.x)
+	var near := [0, 0]
+	for t in tris_over(tris, gj.a) + tris_over(tris, gj.b):
+		var q: Vector2 = Vector2(t[0].x, t[0].z) - gj.edge
+		var off: float = q.dot(nn)
+		if absf(off) < 5.0 and absf(q.dot(dd)) < 8.0:
+			near[0 if off > 0.0 else 1] += 1
+	gj.side = 1.0 if near[0] <= near[1] else -1.0
+	# his own man: the player and the creature stay out of it, far off
+	g.mon.awareness = 0.0
+	walk = true
+	rpath = [Vector2(-g.bound + 4.0, -g.bound + 4.0), Vector2(-g.bound + 6.0, -g.bound + 4.0)]
+	rs = 0.0
+	rspeed = 0.0
+	man = Man.new()
+	g.add_child(man)
+	var c := "gap_jump"
+	var d: Vector2 = gj.d
+	var yaw := atan2(d.x, d.y)
+	man.reset(yaw)
+	# the leap starts as a stride joins the clip well (its run-up taken over), his toes then reach the
+	# edge as he takes off; working back from there, where and in which stride he starts running
+	var m: Dictionary = man.meta[c]
+	var v: float = man.meta.run.speed
+	var stride: float = man.meta.run.stride
+	var phi := 0.0
+	var bd := INF
+	var last := 0.0      # entries at the end of the run-up it may be joined in are where the match ran out
+	for e in m.entry:
+		last = maxf(last, e)
+	for k in 24:
+		var e := man.jump_entry(k / 24.0 + 0.001, c)
+		if e < last - 0.02 and absf(e - 0.2) < bd:
+			bd = absf(e - 0.2)
+			phi = k / 24.0 + 0.001
+	var entry := man.jump_entry(phi, c)
+	var at_jump: float = -0.08 - float(m.push_toe) + man._root(c, entry).y   # metres from the edge (along d)
+	var s0 := at_jump - v * GJ_RUNUP
+	gj.yaw = yaw
+	gj.speed = v
+	gj.phi = phi
+	gj.entry = entry
+	gj.start = s0
+	man.state = Man.MOVE
+	man.speed = v
+	man.phase = fposmod(phi - v / stride * GJ_RUNUP, 1.0)
+	var e0: Vector2 = gj.edge + d * s0
+	man.position = Vector3(e0.x, gj.ha, e0.y)
+	man.rotation.y = yaw
+	man.real_speed = v
+	gj_mode = "run"
+	print("gapjump: %.1f m roof to %.1f m (%.1f m lower) across %.2f m, line %s -> %s, joins at %.2f s in stride %.2f" % [gj.ha, gj.hb,
+		gj.ha - gj.hb, gj.gap, str(gj.edge.round()), str(d), entry, phi])
+
+## The game stays in the streets, so its roofs were never meant to be seen: their tops carry the facade
+## texture, washed out white in daylight. Every roof, and the top of every set-back storey, gets a dark
+## bitumen membrane, and every roof a concrete coping round its edge (over the cornice).
+func dress_roofs(tris: Array, roofs: Array) -> void:
+	var skin := SurfaceTool.new()
+	skin.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var lift := Vector3(0.0, 0.006, 0.0)
+	var n := 0
+	for t in tris:
+		if not t[3]:
+			continue
+		var p0: Vector3 = t[0]
+		var p1: Vector3 = t[1]
+		var p2: Vector3 = t[2]
+		var nrm := (p1 - p0).cross(p2 - p0)
+		if nrm.length() < 1e-4 or absf(nrm.normalized().y) < 0.98:
+			continue
+		for p in [p0, p1, p2]:
+			skin.set_normal(Vector3.UP)
+			skin.set_uv(Vector2(p.x, p.z) / 3.0)
+			skin.add_vertex(p + lift)
+		n += 1
+	skin.generate_tangents()
+	var mem := StandardMaterial3D.new()
+	mem.albedo_texture = load("res://assets/pbr/asphalt_a.png")
+	mem.albedo_color = Color(0.62, 0.6, 0.58)
+	mem.normal_enabled = true
+	mem.normal_texture = load("res://assets/pbr/asphalt_n.png")
+	mem.normal_scale = 0.9
+	mem.roughness = 0.93
+	mem.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mem.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	var mi := MeshInstance3D.new()
+	mi.mesh = skin.commit()
+	mi.material_override = mem
+	g.add_child(mi)
+	# the coping: a band of concrete over the cornice and a little in from it, all round
+	var cop := SurfaceTool.new()
+	cop.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for r in roofs:
+		var h := float(r[3]) + 0.012
+		var o := [float(r[0]) - 0.3, float(r[1]) + 0.3, float(r[4]) - 0.3, float(r[5]) + 0.3]
+		var i := [float(r[0]) + 0.25, float(r[1]) - 0.25, float(r[4]) + 0.25, float(r[5]) - 0.25]
+		for q in [[o[0], o[2], o[1], i[2]], [o[0], i[3], o[1], o[3]], [o[0], i[2], i[0], i[3]], [i[1], i[2], o[1], i[3]]]:
+			var a := Vector3(q[0], h, q[1])
+			var b := Vector3(q[2], h, q[1])
+			var c := Vector3(q[2], h, q[3])
+			var e := Vector3(q[0], h, q[3])
+			for p in [a, b, c, a, c, e]:
+				cop.set_normal(Vector3.UP)
+				cop.set_uv(Vector2(p.x, p.z) / 2.0)
+				cop.add_vertex(p)
+	cop.generate_tangents()
+	var con := StandardMaterial3D.new()
+	con.albedo_texture = load("res://assets/pbr/paving_a.png")
+	con.albedo_color = Color(0.78, 0.76, 0.72)
+	con.normal_enabled = true
+	con.normal_texture = load("res://assets/pbr/paving_n.png")
+	con.roughness = 0.88
+	con.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var ci := MeshInstance3D.new()
+	ci.mesh = cop.commit()
+	ci.material_override = con
+	g.add_child(ci)
+	# the props up there (air handlers, water towers, vents) are painted for the shade of the street: in the
+	# sun they wash out white. A skin a few millimetres out over them, darker and duller.
+	var kit := SurfaceTool.new()
+	kit.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var np := 0
+	for t in tris:
+		if t[3]:
+			continue
+		for k in 3:
+			var nk: Vector3 = t[4][k]
+			kit.set_normal(nk)
+			kit.set_color(t[5][k])
+			kit.add_vertex((t[k] as Vector3) + nk * 0.008)
+		np += 1
+	var met := StandardMaterial3D.new()
+	met.vertex_color_use_as_albedo = true
+	met.albedo_color = Color(0.42, 0.42, 0.42)
+	met.metallic = 0.45
+	met.roughness = 0.5
+	var ki := MeshInstance3D.new()
+	ki.mesh = kit.commit()
+	ki.material_override = met
+	g.add_child(ki)
+	print("gapjump: roofs dressed (%d roof triangles, %d copings, %d prop triangles)" % [n, roofs.size(), np])
+
+## Every triangle of the city's buildings and props that lies wholly above 10 m (what may stand on a roof):
+## [three corners, whether it is a building's, their normals, their colours].
+func roof_tris() -> Array:
+	var out := []
+	for mi in g.world.find_children("*", "MeshInstance3D", true, false):
+		var nm := String(mi.name)
+		if nm != "build" and nm != "props":
+			continue
+		var xf: Transform3D = (mi as MeshInstance3D).global_transform
+		var arr := (mi as MeshInstance3D).mesh.surface_get_arrays(0)
+		var v: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var nv: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
+		var cv: PackedColorArray = arr[Mesh.ARRAY_COLOR] if arr[Mesh.ARRAY_COLOR] != null else PackedColorArray()
+		var ix: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
+		for k in range(0, ix.size(), 3):
+			var p0: Vector3 = xf * v[ix[k]]
+			var p1: Vector3 = xf * v[ix[k + 1]]
+			var p2: Vector3 = xf * v[ix[k + 2]]
+			if minf(p0.y, minf(p1.y, p2.y)) > 10.0:
+				var nn := [xf.basis * nv[ix[k]], xf.basis * nv[ix[k + 1]], xf.basis * nv[ix[k + 2]]]
+				var cc := [cv[ix[k]], cv[ix[k + 1]], cv[ix[k + 2]]] if cv.size() else [Color.GRAY, Color.GRAY, Color.GRAY]
+				out.append([p0, p1, p2, nm == "build", nn, cc])
+	return out
+
+## The triangles standing on a roof (box [x0, x1, y0, h, z0, z1, layer]): wholly above it, within 15 m, over it.
+func tris_over(tris: Array, r: Array) -> Array:
+	var out := []
+	var h := float(r[3])
+	for t in tris:
+		var lo := minf(t[0].y, minf(t[1].y, t[2].y))
+		if lo < h + 0.05 or lo > h + 15.0:
+			continue
+		var x0 := minf(t[0].x, minf(t[1].x, t[2].x))
+		var x1 := maxf(t[0].x, maxf(t[1].x, t[2].x))
+		var z0 := minf(t[0].z, minf(t[1].z, t[2].z))
+		var z1 := maxf(t[0].z, maxf(t[1].z, t[2].z))
+		if x1 > float(r[0]) - 0.5 and x0 < float(r[1]) + 0.5 and z1 > float(r[4]) - 0.5 and z0 < float(r[5]) + 0.5:
+			out.append(t)
+	return out
+
+## Whether anything on the roof comes within 0.7 m of the line from a to b (x/z) that he runs.
+func blocked(tris: Array, h: float, a: Vector2, b: Vector2) -> bool:
+	for t in tris:
+		var p := [Vector2(t[0].x, t[0].z), Vector2(t[1].x, t[1].z), Vector2(t[2].x, t[2].z)]
+		if Geometry2D.point_is_inside_triangle(a, p[0], p[1], p[2]) or Geometry2D.point_is_inside_triangle(b, p[0], p[1], p[2]):
+			return true
+		for k in 3:
+			var q0: Vector2 = p[k]
+			var q1: Vector2 = p[(k + 1) % 3]
+			var c := Geometry2D.get_closest_points_between_segments(a, b, q0, q1)
+			if (c[0] as Vector2).distance_to(c[1]) < 0.7:
+				return true
+	return false
+
+## The leap's beats: when to slow down, when it is over.
+## Slow motion from a moment before he takes off until just after he lands, eased in and out (a speed ramp).
+func step_gapjump(t: float) -> void:
+	if man == null or gj.is_empty():
+		return
+	var m: Dictionary = man.meta["gap_jump"]
+	if gj_mode in ["jump", "air"] and man.ct >= float(m.takeoff) - 0.12 and not events.has("slow_on_1"):
+		# in game time: 0.12 s before, the flight, 0.25 s after; the ramps take a little of it at more than GJ_SLOW
+		slow(t, (float(gj.flight) + 0.37) / GJ_SLOW - 0.4, GJ_SLOW)
+	if slow_until >= 0.0 and events.has("slow_on_1"):
+		var into := t - float(events.slow_on_1)
+		var left := slow_until - t
+		var k := clampf(minf(into / 0.3, left / 0.35), 0.0, 1.0)
+		Engine.time_scale = lerpf(1.0, GJ_SLOW, k * k * (3.0 - 2.0 * k))
+	if gj_mode == "on" and gj_down > 1.6:
+		end_after(t, 0.1)
+
+## One frame of him: running, the clip's run-up, in the air, landed. After the game's own update.
+func drive_man(dt: float) -> void:
+	if man == null or gj.is_empty():
+		return
+	var t := now()
+	var c := "gap_jump"
+	var d: Vector2 = gj.d
+	var R := Basis(Vector3.UP, float(gj.yaw))
+	var m: Dictionary = man.meta[c]
+	man.real_speed = man.speed
+	match gj_mode:
+		"run":
+			gj_run += dt
+			var before := fposmod(man.phase, 1.0)
+			_man_step(dt, d, gj.ha)
+			var p := fposmod(man.phase, 1.0)
+			var crossed: bool = (before < gj.phi and p >= gj.phi) or (before > p and (before < gj.phi or p >= gj.phi))
+			# (the stride comes round every 0.77 s: only the one GJ_RUNUP seconds in)
+			if crossed and gj_run > GJ_RUNUP - 0.3:
+				man.phase = gj.phi
+				man.jump(c)
+				_plan_flight()
+				gj_mode = "jump"
+				mark("jump", t)
+		"jump":
+			_man_step(dt, d, gj.ha)
+			if man.ct >= float(m.takeoff):
+				# off: his hips fly the arc from here
+				var tk := float(m.takeoff)
+				gj.hips0 = man.position + R * man.clip_hips(c, man.ct)
+				gj_air = man.ct - tk
+				gj_mode = "air"
+				mark("takeoff", t)
+				var r1 := man._root(c, float(m.land))
+				var h1 := man.clip_hips(c, float(m.land))
+				var land_at: Vector3 = gj.hips0 + gj.vh * float(gj.flight)
+				var heel: float = (Vector2(land_at.x, land_at.z) - gj.edge).dot(d) + float(m.land_heel) - (r1.y + h1.z)
+				print("gapjump: off at %.2f s, %.2f s in the air (the clip's %.2f s), lands with his heels %.2f m past the far edge (at %.2f)"
+					% [t, gj.flight, float(m.land) - tk, heel - float(gj.gap), float(gj.gap)])
+		"air":
+			gj_air += dt
+			var T: float = gj.flight
+			var tau := minf(gj_air, T)
+			var hips: Vector3 = gj.hips0 + gj.vh * tau + Vector3(0.0, gj.vy * tau - 0.5 * GRAV * tau * tau, 0.0)
+			var ct := float(m.takeoff) + (float(m.land) - float(m.takeoff)) * _warp(tau / T, gj.stretch)
+			man.ct = ct
+			man.position = hips - R * man.clip_hips(c, ct)
+			man.rotation.y = gj.yaw
+			man.animate(dt)
+			if gj_air >= T:
+				man.position.y = gj.hb
+				gj_mode = "down"
+				gj_down = 0.0
+				mark("touchdown", t)
+		"down", "on":
+			gj_down += dt
+			_man_step(dt, d, gj.hb)
+			# the rest of a long drop: deeper into the knees than the clip's landing off level ground
+			var deep := clampf(0.055 * (float(m.rise) + gj.ha - gj.hb), 0.0, 0.2)
+			var k := gj_down / 0.12 if gj_down < 0.12 else maxf(0.0, 1.0 - (gj_down - 0.12) / 0.45)
+			if k > 0.0:
+				_absorb(deep * (k * k * (3.0 - 2.0 * k)))
+			if gj_mode == "down" and man.state == Man.MOVE:
+				gj_mode = "on"
+	if man.step != gj_steps:
+		gj_steps = man.step
+		mark("step_%d" % gj_steps, t)
+
+## The flight, worked out as the leap starts: his hips leave at the clip's speed over the ground and rise as
+## high as the clip's do, then fall under gravity to land on the far roof the way the clip lands.
+func _plan_flight() -> void:
+	var c := "gap_jump"
+	var m: Dictionary = man.meta[c]
+	var tk := float(m.takeoff)
+	var ld := float(m.land)
+	var h0 := man.clip_hips(c, tk)
+	var h1 := man.clip_hips(c, ld)
+	var r0 := man._root(c, tk)
+	var r1 := man._root(c, ld)
+	var travel := Vector3(r1.x + h1.x - r0.x - h0.x, 0.0, r1.y + h1.z - r0.y - h0.z)
+	var vy := sqrt(2.0 * GRAV * float(m.rise))
+	var fall: float = (gj.ha + h0.y) - (gj.hb + h1.y)
+	var T := (vy + sqrt(vy * vy + 2.0 * GRAV * fall)) / GRAV
+	gj.vh = Basis(Vector3.UP, float(gj.yaw)) * (travel / (ld - tk))
+	gj.vy = vy
+	gj.flight = T
+	gj.stretch = T / (ld - tk)
+
+## The clip's time through the air, as a share of it, at a share of the flight: a cubic that starts and ends at
+## the clip's own pace (k = how much longer the flight is) and is slowest at the top.
+func _warp(x: float, k: float) -> float:
+	x = clampf(x, 0.0, 1.0)
+	return (x * x * x - 2.0 * x * x + x) * k + (-2.0 * x * x * x + 3.0 * x * x) + (x * x * x - x * x) * k
+
+func _man_step(dt: float, d: Vector2, y: float) -> void:
+	var step := man.move(dt, d, float(gj.speed), false)
+	man.position += step
+	man.position.y = y
+	man.rotation.y = man.yaw
+	man.animate(dt)
+
+## Lowers his hips by `by` (m) with his feet left where they are: the knees bend.
+func _absorb(by: float) -> void:
+	var sk := man.skel
+	var keep := []
+	for leg in man.legs:
+		var f := sk.get_bone_global_pose(leg[2])
+		keep.append([f.origin, f.basis])
+	sk.set_bone_pose_position(0, sk.get_bone_pose_position(0) - Vector3(0.0, by, 0.0))
+	for i in 2:
+		man._reach(man.legs[i], keep[i][0], keep[i][1])
+
 # ---------------------------------------------------------------- the camera
 ## Which camera at time t. Each recipe has a hero shot that carries most of it (the car and the creature both in
 ## frame); it cuts away only on the beats, for two to three seconds.
 func cut(t: float) -> String:
 	var slowing := slow_until >= 0.0
 	match recipe:
+		"gapjump":
+			# behind him as he runs at the gap; from above the alley as he leaps (the drop under him); low on the
+			# far roof as he comes down; ahead of him as he runs on
+			if not events.has("jump"):
+				return "gj_chase"
+			if gj_mode == "jump" or (gj_mode == "air" and gj_air < float(gj.flight) * 0.5):
+				return "gj_high"
+			if not events.has("touchdown") or t < float(events.touchdown) + 1.3:
+				return "gj_low"
+			return "gj_front"
 		"ram", "hunter":
 			if events.has("fall"):
 				if slowing and not lock.is_empty():
@@ -1358,6 +1787,37 @@ func camera(t: float, dt: float) -> void:
 			pos = pulled(rhead, rhead + right * 3.8 + fwd * 1.6 + Vector3(0, -0.4, 0))
 			look = rhead
 			fov = 56.0
+		"gj_chase", "gj_high", "gj_low", "gj_front":
+			var d2: Vector2 = gj.d
+			var d3 := Vector3(d2.x, 0.0, d2.y)
+			var n3 := Vector3(-d2.y, 0.0, d2.x) * float(gj.side)
+			var hips := man.skel.global_transform * man.skel.get_bone_global_pose(0).origin
+			var e: Vector2 = gj.edge
+			var gap_mid := Vector3(e.x, gj.ha, e.y) + d3 * float(gj.gap) * 0.5
+			var landing := Vector3(e.x, gj.hb, e.y) + d3 * (float(gj.gap) + 0.9)
+			if mode == "gj_chase":
+				# behind and above him, the gap and the lower roof ahead
+				var on_roof := Vector3(hips.x, gj.ha, hips.z)
+				pos = on_roof - d3 * 3.8 + n3 * 0.7 + Vector3(0, 2.4, 0)
+				look = gap_mid + d3 * 3.0 + Vector3(0, -0.8, 0)
+				fov = 66.0
+			elif mode == "gj_high":
+				# over the alley, along it and up: he leaves the edge with the slot of the alley under him, the
+				# street at the bottom of it; the lens follows him, leaning down into the drop
+				pos = gap_mid + n3 * 5.5 - d3 * 0.8 + Vector3(0, 4.6, 0)
+				look = hips.lerp(gap_mid + Vector3(0, -6.0, 0), 0.35)
+				fov = 66.0
+			elif mode == "gj_low":
+				# low on the far roof, beside where he lands, looking back across the gap
+				pos = landing + n3 * 2.9 + d3 * 2.4 + Vector3(0, 0.45, 0)
+				look = landing - d3 * 1.2 + Vector3(0, 1.4, 0)
+				fov = 64.0
+			else:
+				# on the lower roof ahead of him, low: he runs at the lens, the gap behind him
+				var on_b := Vector3(hips.x, gj.hb, hips.z)
+				pos = on_b + d3 * 5.0 + n3 * 1.1 + Vector3(0, 0.9, 0)
+				look = on_b + Vector3(0, 1.0, 0) - d3 * 1.5
+				fov = 62.0
 		"wide":
 			var hp2 := Vector3(hide.x, 0.0, hide.y)
 			var mid3 := hp2.lerp(m.pos, 0.5)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turns a clip recorded by godot/tests/short.gd into a finished Short: sound design laid on the moments the
 director logged (EVENT lines: bites, the flip and the landing, the ram, each car thrown, the jaws snapping, roars,
-slow motion, the heartbeat), a light wind bed under it all, a short hook caption, loudness evened out for YouTube,
+slow motion, the heartbeat; footsteps, the take-off and the landing of a rooftop leap), a light wind bed under it all, a short hook caption, loudness evened out for YouTube,
 a contact sheet (one frame a second) to check the cuts at a glance, and a .txt with a title, description and tags.
 
     python3 tools/shorts/compose.py --clip out/clip.avi --log godot.log --recipe flip --seed 1 --out out/flip_seed1.mp4
@@ -21,7 +21,7 @@ WHOOSH = os.path.join(ROOT, "getaway", "assets", "sounds", "whoosh.wav")
 FONT = os.path.join(ROOT, "getaway", "assets", "fonts", "BigShouldersDisplay.ttf")
 
 HOOK = {"flip": "WAIT FOR IT", "ram": "CAR VS T-REX", "nearmiss": "TOO CLOSE", "freeze": "DO NOT MOVE", "domino": "",
-        "hunter": "HUNT IT DOWN"}
+        "hunter": "HUNT IT DOWN", "gapjump": "DON'T LOOK DOWN"}
 
 # What to paste into YouTube for each Short: a title picked by the seed (so two videos of one recipe differ),
 # a description and tags. Titles stay under 100 characters; no film or car brand names.
@@ -38,6 +38,8 @@ TITLES = {
                "Hold Your Breath 😶🦖", "It Hunts by Movement… 🦖"],
     "hunter": ["He Hunted Down the T-Rex 🦖💥", "Car vs T-Rex: Round Two 🚗💥", "The Hunter Becomes the Hunted… 🦖",
                "Taking Down a T-Rex With a Car 😳", "Full Speed. Twice. 💥🦖"],
+    "gapjump": ["He Jumped the Gap… 😳", "Rooftop Leap in Slow Motion 🏙️", "One Jump, Eight Floors Up 😱",
+                "Would You Make This Jump? 🏃💨", "Don't Look Down… 😰"],
 }
 STORY = {
     "flip": "A T-Rex chases a car through an empty city, bites it twice and throws it over. Watch it in slow motion.",
@@ -46,21 +48,28 @@ STORY = {
     "nearmiss": "Its jaws snap shut again and again, inches from the car. Can he get away?",
     "freeze": "It sees what moves. He hides beside a car and holds still while the T-Rex sniffs around him.",
     "hunter": "This time he goes looking for it. Full speed, head on. Then he backs up and does it again.",
+    "gapjump": "A running leap across the alley between two rooftops, high above the street, in slow motion. "
+               "(3D animation: motion-captured movement in a game engine city.)",
 }
 QUESTION = {
     "flip": "Would you have made it out? 👇", "ram": "Who won this one? 👇", "domino": "How many did you count? 👇",
     "nearmiss": "Closest call you've seen? 👇", "freeze": "Could you stay still? 👇", "hunter": "Round three? 👇",
+    "gapjump": "Would you make this jump? 👇",
 }
+# (a rooftop leap has nothing to do with dinosaurs: its own tags)
+PARKOUR_TAGS = ["parkour", "rooftop", "rooftop jump", "free running", "stunt", "slow motion", "3d animation", "cgi",
+                "motion capture", "game", "gameplay", "shorts", "city", "satisfying"]
 TAGS = ["t rex", "trex", "dinosaur", "dinosaur chase", "t rex chase", "t rex vs car", "car chase", "dinosaur attack",
         "satisfying", "slow motion", "3d animation", "game", "gameplay", "shorts", "dino", "city", "survival"]
 RECIPE_TAGS = {
     "flip": ["car flip", "car crash", "slow motion crash"], "ram": ["car vs dinosaur", "head on crash", "car crash"],
     "domino": ["car smash", "destruction", "satisfying destruction"], "nearmiss": ["near miss", "close call", "escape"],
     "freeze": ["hiding", "suspense", "asmr", "stealth"], "hunter": ["car vs dinosaur", "t rex knockout", "head on crash"],
+    "gapjump": ["gap jump", "roof jump", "high jump"],
 }
 HASHTAGS = {"flip": "#trex #dinosaur #slowmotion", "ram": "#trex #dinosaur #carcrash", "domino": "#trex #satisfying #dinosaur",
             "nearmiss": "#trex #dinosaur #closecall", "freeze": "#trex #dinosaur #suspense",
-            "hunter": "#trex #dinosaur #carcrash"}
+            "hunter": "#trex #dinosaur #carcrash", "gapjump": "#parkour #rooftop #slowmotion"}
 
 
 def metadata(recipe, seed):
@@ -68,7 +77,7 @@ def metadata(recipe, seed):
     titles = TITLES.get(recipe, ["T-Rex in the City 🦖"])
     title = titles[seed % len(titles)] + " #shorts"
     desc = "%s\n\n%s\n\n#shorts %s" % (STORY.get(recipe, ""), QUESTION.get(recipe, ""), HASHTAGS.get(recipe, "#trex"))
-    tags = ", ".join(RECIPE_TAGS.get(recipe, []) + TAGS)
+    tags = ", ".join(RECIPE_TAGS.get(recipe, []) + (PARKOUR_TAGS if recipe == "gapjump" else TAGS))
     return "TITLE\n%s\n\nDESCRIPTION\n%s\n\nTAGS\n%s\n" % (title, desc, tags)
 
 
@@ -104,6 +113,13 @@ def effects(name, n):
         return [("growl_3", 0.45, 0.3, 0.8)]
     if name.startswith("slow_on"):
         return [("whoosh", 0.7, 0, 0.5)]
+    # a man on a roof: his footsteps, the push off the edge, and the landing a floor lower
+    if name.startswith("step"):
+        return [("step_dry_%d" % (n % 4 + 1), 0.55, 0, 1)]
+    if name == "takeoff":
+        return [("step_dry_2", 1.0, 0, 0.9), ("whoosh", 0.55, 0.05, 0.8)]
+    if name == "touchdown":
+        return [("thud_2", 1.0, 0, 0.9), ("step_dry_3", 1.0, 0, 0.85), ("step_dry_1", 0.9, 0.06, 0.85), ("SUB", 0.6, 0, 1)]
     return []
 
 
@@ -176,7 +192,9 @@ def main():
     mix = ["[ga]", "[amb]"]
     # (atrim by name: its second positional option is another start, not the end)
     filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,apad,volume=1.0[ga]" % (game_in, vend))
-    filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,volume=0.2[amb]" % (wind_in, total))
+    # (up on a roof the wind is the loudest thing there is)
+    wind = 0.45 if a.recipe == "gapjump" else 0.2
+    filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,volume=%.2f[amb]" % (wind_in, total, wind))
     idx = wind_in + 1
     count = {}
     for name, t in events:

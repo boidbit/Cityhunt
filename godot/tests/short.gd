@@ -1920,13 +1920,7 @@ func _rr_path() -> void:
 				leap.s_far = sb - 0.3
 		leap.cam_side = C * (1.0 if L.row == 1 else -1.0) if L.kind != "gap" else A
 		leaps.append(leap)
-	# the biggest drop in slow motion too
-	var big := -1
-	for i in leaps.size():
-		if leaps[i].kind == "down" and (big < 0 or leaps[i].h_from - leaps[i].h_to > leaps[big].h_from - leaps[big].h_to):
-			big = i
-	if big >= 0:
-		leaps[big].slow = true
+	# (slow motion for the alley alone: the rest at full speed)
 	rr.leaps = leaps
 	rr.s_stop = rr.len - 9.0
 
@@ -1987,7 +1981,7 @@ func _rr_feet_tables() -> void:
 				rr_toe[f] = (i + 1) / 96.0
 	print("roofrun: sprinting, the left foot leaves the ground at %.2f of the stride, the right at %.2f" % rr_toe)
 
-## The beats: slow motion on the big leaps (eased in and out), the end once he has pulled up.
+## The beats: slow motion on the alley leap (eased in and out), the end once he has pulled up.
 func step_roofrun(t: float) -> void:
 	if man == null or rr.is_empty():
 		return

@@ -7,8 +7,8 @@
 ##   roof cracks), front-flips at the top of the arc and lands on it;
 ## - drop: a roof 4 m or more lower, or at the end the street: he dives off at full tilt, flips on the way down
 ##   and comes down in a superhero landing (one knee, one fist), cracking whatever he lands on, then is up and off.
-## Gravity on the super moves is twice the real one, so a 20 m leap is a blast, not a float; the slow motion comes
-## where the eye wants it: the crouch, the flip, the impact.
+## Gravity on the super moves is twice the real one, so a 20 m leap is a blast, not a float. Slow motion is kept
+## for two moments only: the flip at the top of the biggest leap, and the last landing, in the street.
 ## The route (picked by the seed): a search of the roofs for 3-5 moves, every kind of move in it if it can be,
 ## going on the same way more or less, a run-up on every roof, ending on a roof high enough to drop to the street.
 extends RefCounted
@@ -85,6 +85,16 @@ func setup() -> bool:
 	man.position = Vector3(start.x, float(m0.h_from), start.y)
 	man.rotation.y = man.yaw
 	mode = "run"
+	# the two moments in slow motion: the biggest leap up's flip, the last landing
+	var big := -1
+	for i in route.size():
+		var m: Dictionary = route[i]
+		m.slow = false
+		if m.kind == "mega" and (big < 0 or float(m.h_to) - float(m.h_from) > float(route[big].h_to) - float(route[big].h_from)):
+			big = i
+	if big >= 0:
+		route[big].slow = true
+	route[-1].slow = true
 	var desc := []
 	for m in route:
 		desc.append("%s %+.0f m%s" % [m.kind, float(m.h_to) - float(m.h_from), " over %.0f m" % m.gap if float(m.gap) > 6.0 else ""])
@@ -706,23 +716,18 @@ func step(t: float) -> void:
 	if route.is_empty():
 		return
 	var want := 1.0
-	match mode:
-		"crouch":
-			want = 0.3
-		"air":
-			if fl.super:
-				var x: float = tmr / float(fl.T)
-				var m: Dictionary = route[mini(mi, route.size() - 1)]
-				if x > 0.16 and x < 0.66:
-					want = 0.32
-				elif x > 0.88 and m.kind == "drop":
-					want = 0.25
-				elif x >= 0.74 and m.kind == "mega":
-					want = 0.45
-		"hero":
-			want = 0.3 if tmr < 0.45 else 1.0
-		"land":
-			want = 0.5 if tmr < 0.2 else 1.0
+	var m: Dictionary = route[mini(mi, route.size() - 1)]
+	if m.slow:
+		match mode:
+			"air":
+				if fl.super:
+					var x: float = tmr / float(fl.T)
+					if m.kind == "mega" and x > 0.3 and x < 0.6:
+						want = 0.4
+					elif m.kind == "drop" and x > 0.9:
+						want = 0.3
+			"hero":
+				want = 0.35 if tmr < 0.35 else 1.0
 	var cur := Engine.time_scale
 	Engine.time_scale = move_toward(cur, want, 3.5 / float(d.fps))
 	if Engine.time_scale < 0.6 and not slowed:

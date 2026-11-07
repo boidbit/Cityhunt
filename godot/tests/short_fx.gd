@@ -134,6 +134,8 @@ func _dust_emitter(n: int, life: float, s0: float, s1: float) -> GPUParticles3D:
 	m.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
 	m.emission_sphere_radius = 1.0
 	var p := GPUParticles3D.new()
+	p.fixed_fps = 0
+	p.interpolate = false
 	p.amount = n
 	p.lifetime = life
 	p.local_coords = false
@@ -147,6 +149,10 @@ func _dust_emitter(n: int, life: float, s0: float, s1: float) -> GPUParticles3D:
 
 func _emit(at: Vector3, n: int, life: float, mesh: Mesh, m: ParticleProcessMaterial, collide: bool, floor_y := NAN) -> void:
 	var p := GPUParticles3D.new()
+	# stepped every frame, not at a fixed rate and in between: across a change of time scale (slow motion) the
+	# in-between drew some bits as long streaks from where they had been to where they were
+	p.fixed_fps = 0
+	p.interpolate = false
 	p.one_shot = true
 	p.explosiveness = 0.95
 	p.amount = maxi(n, 1)

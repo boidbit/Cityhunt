@@ -1269,7 +1269,15 @@ func camera(mode_name: String, t: float) -> Array:
 			var sn := Vector3(st.n.x, 0.0, st.n.y)
 			var at: Vector3 = kick_cam.get("at", hips)
 			if not kick_cam.has("pos"):
-				kick_cam.pos = d.pulled(at + Vector3(0, 1.0, 0), at + sn * 5.2 - sd * 1.2 + Vector3(0, 1.0, 0))
+				# whichever side of the street has room; if neither does, over his shoulder (where he ran from)
+				var from := at + Vector3(0, 1.0, 0)
+				var best := d.pulled(from, at - sd * 5.0 + sn * 1.6 + Vector3(0, 1.4, 0)) as Vector3
+				for side in [1.0, -1.0]:
+					var q: Vector3 = d.pulled(from, at + sn * side * 5.2 - sd * 1.2 + Vector3(0, 1.0, 0))
+					if q.distance_to(from) > 4.6 and q.distance_to(from) > best.distance_to(from) - 0.5:
+						best = q
+						break
+				kick_cam.pos = best
 			pos = kick_cam.pos
 			look = (at + Vector3(0, 0.9, 0)).lerp(hips, 0.5) if mode != "hit" else hips
 			fov = 66.0

@@ -27,6 +27,11 @@ on:
         type: choice
         default: pass
         options: [pass, fail_fall, fail_car, random]
+      length:
+        description: "Video length in seconds at most (auto: as long as the recipe takes; superchase fits its roofs and cars to it)"
+        type: choice
+        default: auto
+        options: [auto, "15", "20", "30", "45", "60"]
 
 permissions:
   contents: read
@@ -80,12 +85,12 @@ jobs:
       RECIPE: ${{ matrix.recipe }}
       SEED: ${{ matrix.seed }}
       OUTCOME: ${{ inputs.outcome }}
+      LENGTH: ${{ inputs.length }}
     steps:
-      # the director and the sound mix live on the shorts-video branch: a run started from main uses that branch's
-      # code, a run started from any other branch (to try changes to the director) uses that branch's own
+      # the code of the branch the run was started from (main, or a branch with changes to try)
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name == 'main' && 'shorts-video' || github.ref_name }}
+          ref: ${{ github.ref_name }}
 
       - name: Install the software GPU, a virtual screen and ffmpeg
         run: |
@@ -135,7 +140,7 @@ jobs:
           start=$(date +%s)
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
             --audio-driver Dummy --resolution 1080x1920 --fixed-fps 120 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
-            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED --fps=120 --outcome=${OUTCOME#fail_} 2>&1 | tee godot.log
+            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED --fps=120 --outcome=${OUTCOME#fail_} --length=${LENGTH/auto/0} 2>&1 | tee godot.log
           echo "recording took $(( $(date +%s) - start )) s"
           test -s out/clip.avi
           # what happened, as annotations on the run page: the clip, the second-by-second trace, and any errors

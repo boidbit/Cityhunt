@@ -59,6 +59,8 @@ var st_s := 0.0              # how far along it he is
 var st_off := 0.0            # how far to the side of its line
 var cars_on: Array = []      # the cars after him (see _street_begin)
 var kick_cam := {}
+var want_len := 0.0          # seconds of video wanted (0: as long as it takes): how many roofs, how many cars
+var relax := false           # no route with all the street it wants: take one with less
 
 func _init(p_d) -> void:
 	d = p_d
@@ -77,7 +79,9 @@ func setup() -> bool:
 		if float(c[2]) == 0.0 and float(c[3]) >= 12.0 and int(c[6]) == 3:
 			roofs.append(c)
 	if not _plan(roofs):
-		return false
+		relax = true
+		if not chase or not _plan(roofs):
+			return false
 	# the roofs on the route cleared (they are run over), every roof dressed
 	var edits := []
 	for m in route:
@@ -204,8 +208,8 @@ func _to_street(a: Array, u_prev: Vector2) -> Dictionary:
 			var land: Vector2 = e + n * 6.0
 			if not _open_ground(land) or not _open_ground(e + n * 3.0):
 				continue
-			if chase and _open_run(land, Vector2(-n.y, n.x), 60.0) < 45.0 and _open_run(land, Vector2(n.y, -n.x), 60.0) < 45.0:
-				# the chase needs a long straight of street to run
+			if chase and maxf(_street_room(land, Vector2(-n.y, n.x)), _street_room(land, Vector2(n.y, -n.x))) < (0.6 if relax else 1.0):
+				# the chase needs a long straight of street to run, and some behind him for the cars
 				continue
 			var score: float = n.dot(u_prev) - absf(f - 0.5)
 			if score > bd:
@@ -263,7 +267,7 @@ func _plan(roofs: Array) -> bool:
 			var fin := _to_street(roofs[i], last.u)
 			if not fin.is_empty() and _runway(last.land, fin.take, last.u, fin.u):
 				res.found.append([_score(path, fin), path + [fin], path.size() >= 2 and path[-1].kind == "mega"])
-		if path.size() >= (2 if chase else 4):
+		if path.size() >= (_max_moves() if chase else 4):
 			return
 		for m in moves[i]:
 			if seen.has(m.j):
@@ -325,7 +329,15 @@ func _score(path: Array, fin: Dictionary) -> float:
 			sc += 0.8
 	sc += kinds.size() * 4.0 + float(fin.h_from) / 12.0
 	# 3-4 moves and the drop make a Short; more is a long one
+	if chase:
+		return sc - absf(path.size() - _max_moves()) * 4.5
 	return sc - maxf(0.0, path.size() - 2) * 4.5
+
+## Roof to roof moves before the street, by the length of video wanted.
+func _max_moves() -> int:
+	if want_len <= 0.0:
+		return 2
+	return 1 if want_len <= 20.0 else (2 if want_len <= 32.0 else (3 if want_len <= 50.0 else 4))
 
 # ---------------------------------------------------------------- him
 ## When each foot leaves the ground in his sprint (a fraction of the stride: left, right).
@@ -411,22 +423,12 @@ func drive(dt: float) -> void:
 					man.speed = 0.5
 					hero_fade = 1.0 / 0.55
 					_next(t)
-		"falling":
-			# tumbling down the wall he hit; it goes dark before he lands
-			var v: Vector3 = fl.fall_v
-			v.y -= GS * dt
-			fl.fall_v = v
-			fl.fall_p = (fl.fall_p as Vector3) + v * dt
-			man.position = (fl.fall_p as Vector3) - Basis(Vector3.UP, man.yaw) * man.clip_hips(fl.clip, man.ct)
-			man.rotation.y = man.yaw
-			man.animate(dt)
-			var hl := man.skel.get_bone_pose_position(0)
-			var B := Basis(Vector3.RIGHT, -tmr * 4.0)
-			man.body.transform = Transform3D(B, hl - B * hl)
-			if tmr > 0.6 and not d.events.has("caught"):
-				d.mark("caught", t)
-				d.end_after(t, 0.45)
-		"street", "dodge", "vault", "vault_land", "kick", "after", "hit":
+		"thrown", "getup":
+			if not st.is_empty():
+				st_t += dt
+				_street_cars(dt, t)
+			_thrown_step(dt, t)
+		"street", "dodge", "vault", "vault_land", "kick", "after":
 			_street(dt, t)
 		"end":
 			man.move(dt, Vector2(), 0.0, false)
@@ -572,13 +574,12 @@ func _air(dt: float, t: float, m: Dictionary) -> void:
 		if (Vector2(hips.x, hips.z) - Vector2(fl.hips0.x, fl.hips0.z)).dot(m.u) >= wall:
 			# into the wall, short of the top: knocked back off it, falling
 			var vyn: float = float(fl.vy) - float(fl.g) * tau
-			fl.fall_v = Vector3(-m.u.x * 1.4, minf(vyn, 0.0), -m.u.y * 1.4)
-			fl.fall_p = hips
-			mode = "falling"
-			tmr = 0.0
 			fx.burst("impact", hips + Vector3(m.u.x, 0.4, m.u.y) * 0.4, Vector3(-m.u.x, 0.3, -m.u.y))
 			shake = maxf(shake, 0.3)
 			d.mark("wallhit", t)
+			man.body.transform = Transform3D()
+			_thrown(Vector3(-m.u.x * 1.6, minf(vyn, 0.0), -m.u.y * 1.6), GS, -1.0,
+				g.world.ground_at(hips.x - m.u.x * 2.0, hips.z - m.u.y * 2.0, 0.0), hips)
 			return
 	var ct: float
 	if not fl.super:
@@ -594,6 +595,16 @@ func _air(dt: float, t: float, m: Dictionary) -> void:
 	man.position = hips - R * man.clip_hips(c, ct)
 	man.rotation.y = man.yaw
 	man.animate(dt)
+	if chase and fl.super:
+		# flying, not falling: a fist out, one knee drawn up, leaning into the way down
+		var vy_now: float = float(fl.vy) - float(fl.g) * tau
+		var w := _ease((x - 0.06) / 0.14) * (1.0 - _ease((x - 0.8) / 0.12))
+		_fly_pose(w, clampf(vy_now / 10.0, -1.0, 1.0))
+		var pitch := clampf(-vy_now * 0.035, 0.0, 0.5) * w
+		if pitch > 0.001:
+			var hl0 := man.skel.get_bone_pose_position(0)
+			var B0 := Basis(Vector3.RIGHT, pitch)
+			man.body.transform = Transform3D(B0, hl0 - B0 * hl0)
 	var turn := float(fl.flip) * _ease(clampf((x - 0.2) / 0.52, 0.0, 1.0))
 	if turn > 0.0 and turn < TAU - 0.001:
 		var hl := man.skel.get_bone_pose_position(0)
@@ -675,6 +686,40 @@ func _hero_pose(w: float) -> void:
 	var hg := sk.get_bone_global_pose(ids["Bip01 R Hand"])
 	hg.basis = Basis(Quaternion(hg.basis.x.normalized(), Vector3(0.0, -1.0, 0.15).normalized())) * hg.basis
 	sk.set_bone_global_pose(ids["Bip01 R Hand"], hg)
+	if w >= 0.999:
+		return
+	for n in ids:
+		var i: int = ids[n]
+		sk.set_bone_pose_position(i, (base[n][0] as Vector3).lerp(sk.get_bone_pose_position(i), w))
+		sk.set_bone_pose_rotation(i, (base[n][1] as Quaternion).slerp(sk.get_bone_pose_rotation(i), w))
+
+## Flying, laid over the leap clip by w: back straight and chin up, the left leg long with the toes pointed, the
+## right knee drawn up, the right fist out (overhead going up, ahead coming down: up from -1 to 1), the left arm back.
+func _fly_pose(w: float, up: float) -> void:
+	if w <= 0.001:
+		return
+	var sk := man.skel
+	var ids := {}
+	for n in ["Bip01", "Bip01 Spine", "Bip01 Spine1", "Bip01 Neck", "Bip01 Head", "Bip01 L Thigh", "Bip01 L Calf", "Bip01 L Foot",
+			"Bip01 R Thigh", "Bip01 R Calf", "Bip01 R Foot", "Bip01 L UpperArm", "Bip01 L Forearm", "Bip01 L Hand",
+			"Bip01 R UpperArm", "Bip01 R Forearm", "Bip01 R Hand"]:
+		ids[n] = sk.find_bone(n)
+	var base := {}
+	for n in ids:
+		base[n] = [sk.get_bone_pose_position(ids[n]), sk.get_bone_pose_rotation(ids[n])]
+	for n in [["Bip01 Spine", -10.0], ["Bip01 Spine1", -8.0], ["Bip01 Neck", -6.0], ["Bip01 Head", -12.0]]:
+		_turn(ids[n[0]], deg_to_rad(n[1]))
+	var hp: Vector3 = sk.get_bone_global_pose(ids["Bip01"]).origin
+	var pl: Basis = Basis(Vector3.RIGHT, deg_to_rad(55.0)) * sk.get_bone_global_rest(ids["Bip01 L Foot"]).basis
+	var pr: Basis = Basis(Vector3.RIGHT, deg_to_rad(45.0)) * sk.get_bone_global_rest(ids["Bip01 R Foot"]).basis
+	_ik(ids["Bip01 L Thigh"], ids["Bip01 L Calf"], ids["Bip01 L Foot"], hp + Vector3(0.1, -0.93, -0.14), Vector3(0.0, 0.0, 1.0), pl)
+	_ik(ids["Bip01 R Thigh"], ids["Bip01 R Calf"], ids["Bip01 R Foot"], hp + Vector3(-0.12, -0.52, 0.08), Vector3(0.0, 0.25, 1.0), pr)
+	var shr: Vector3 = sk.get_bone_global_pose(ids["Bip01 R UpperArm"]).origin
+	var shl: Vector3 = sk.get_bone_global_pose(ids["Bip01 L UpperArm"]).origin
+	var k := (up + 1.0) * 0.5
+	_ik(ids["Bip01 R UpperArm"], ids["Bip01 R Forearm"], ids["Bip01 R Hand"], shr + Vector3(-0.06, 0.12, 0.56).lerp(Vector3(-0.05, 0.56, 0.2), k),
+		Vector3(-0.4, -1.0, 0.0), null)
+	_ik(ids["Bip01 L UpperArm"], ids["Bip01 L Forearm"], ids["Bip01 L Hand"], shl + Vector3(0.2, -0.46, -0.3), Vector3(0.3, 0.0, -1.0), null)
 	if w >= 0.999:
 		return
 	for n in ids:
@@ -805,42 +850,70 @@ func _street_begin(t: float) -> void:
 	var best := {}
 	for sgn in [1.0, -1.0]:
 		var dir: Vector2 = Vector2(-u.y, u.x) * sgn
-		var ahead := _open_run(p0, dir, 90.0)
-		if best.is_empty() or ahead > float(best.ahead):
-			best = {"dir": dir, "ahead": ahead, "behind": _open_run(p0, -dir, 60.0)}
+		var room := _street_room(p0, dir)
+		if best.is_empty() or room > float(best.room):
+			best = {"dir": dir, "room": room}
 	st = best
+	var dir: Vector2 = st.dir
+	st.ahead = _open_run(p0, dir, 130.0)
+	st.behind = _open_run(p0, -dir, 60.0)
 	st.p0 = p0
 	st.n = u
 	st.y = float(m.h_to)
-	var dir: Vector2 = st.dir
-	# what is parked along it goes; the cars that come for him are taken from the rest
+	# what is parked along it goes, every door is shut; the cars that come for him are taken from the rest
 	var picked := []
 	for c in g.veh.cars:
+		if c.get("hinge"):
+			(c.hinge as Node3D).rotation.y = 0.0
 		if c.state == "gone" or c.state == "tumble" or c.node == null:
 			continue
 		var q: Vector2 = (c.pos as Vector2) - p0
 		var along := q.dot(dir)
 		if along > -float(st.behind) - 8.0 and along < float(st.ahead) + 8.0 and absf(q.dot(u)) < 4.5:
 			_park_away(c)
-		elif c.state == "parked" and picked.size() < 5:
+		elif c.state == "parked" and picked.size() < 8:
 			picked.append(c)
-	# [seconds into the street when it reaches him, +1 from behind / -1 head on, what he does]
-	var beats := [[2.8, 1, "step"], [4.9, 1, "dive"], [7.1, -1, "vault"], [9.4, -1, "kick"], [9.9, 1, "brake"]]
-	if outcome == "car":
-		beats = [[2.8, 1, "step"], [4.9, 1, "hit"]]
+	# they wait in the street, engines running, in the order they will go: behind him, and up ahead
+	var beats := _beats()
+	var nb := 0
+	var nh := 0
+	for b in beats:
+		if int(b[1]) > 0:
+			nb += 1
+		else:
+			nh += 1
+	var gap_b := clampf((float(st.behind) - 9.0) / maxf(nb - 1, 1), 5.5, 7.0)
+	var far := minf(float(st.ahead) - 4.0, _need_ahead() + 18.0)
+	var kb := 0
+	var kh := 0
 	cars_on = []
 	for i in mini(beats.size(), picked.size()):
 		var c: Dictionary = picked[i]
 		var b: Array = beats[i]
+		var from := int(b[1])
+		var start: float
+		if from > 0:
+			start = -6.0 - gap_b * kb
+			kb += 1
+		else:
+			start = far - 7.0 * (nh - 1 - kh)
+			kh += 1
+		var lane0 := 1.7 if i % 2 == 0 else -1.7
 		if c.box >= 0:
 			g.col.disable_box(c.box)
 		c.state = "driven"
 		c.roll = 0.0
 		c.lift = 0.0
 		c.y = st.y
+		c.pos = _street_at(start, lane0)
+		var hd := dir * float(from)
+		c.yaw = atan2(-hd.y, hd.x)
+		(c.node as Node3D).visible = true
+		g.veh._apply(c)
 		g.world.move_car_halos(c.i, g.veh.xform(c), true)
-		cars_on.append({"c": c, "t": float(b[0]), "from": int(b[1]), "what": b[2], "v": 13.5 if int(b[1]) > 0 else 12.0,
-			"s_meet": 0.0, "lane": 0.0, "fixed": false, "done": false, "past": false, "i": i + 1})
+		cars_on.append({"c": c, "t": float(b[0]), "from": from, "what": b[2], "v": 13.5 if from > 0 else 12.0,
+			"s_meet": start, "start": start, "lane0": lane0, "lane": lane0, "lane_off": _dodge_off(b[2], i + 1),
+			"fixed": false, "done": false, "past": false, "i": i + 1})
 	mode = "street"
 	tmr = 0.0
 	st_t = 0.0
@@ -848,6 +921,38 @@ func _street_begin(t: float) -> void:
 	st_off = 0.0
 	d.mark("engines", t)
 	print("superchase: the street runs %.0f m on (%.0f m behind), %d cars after him" % [float(st.ahead), float(st.behind), cars_on.size()])
+
+## [seconds into the street when it reaches him, +1 from behind / -1 head on, what he does], by the length wanted.
+func _beats() -> Array:
+	if outcome == "car":
+		return [[2.8, 1, "step"], [4.9, 1, "hit"]]
+	if want_len > 0.0 and want_len <= 20.0:
+		return [[2.6, 1, "step"], [5.0, -1, "kick"], [5.5, 1, "brake"]]
+	if want_len > 32.0:
+		return [[2.8, 1, "step"], [4.9, 1, "dive"], [7.1, -1, "vault"], [9.3, 1, "step"], [11.4, 1, "dive"],
+			[13.8, -1, "kick"], [14.3, 1, "brake"]]
+	return [[2.8, 1, "step"], [4.9, 1, "dive"], [7.1, -1, "vault"], [9.4, -1, "kick"], [9.9, 1, "brake"]]
+
+## How much clear street he needs ahead of where he lands (he runs most of it; the last cars wait beyond).
+func _need_ahead() -> float:
+	return SPRINT * float(_beats()[-1][0]) * 0.85 + 22.0
+
+const NEED_BEHIND := 22.0
+
+## 1 or more: a street with all the room the chase needs, either way along it from p.
+func _street_room(p: Vector2, dir: Vector2) -> float:
+	return minf(_open_run(p, dir, _need_ahead() + 10.0) / _need_ahead(), _open_run(p, -dir, NEED_BEHIND + 8.0) / NEED_BEHIND)
+
+## Which side of him a car he dodges goes by: away from the way the dodge takes him (a near miss, not a hit).
+func _dodge_off(what: String, i: int) -> float:
+	if what != "step" and what != "dive":
+		return 0.0
+	var side := 1.0 if i % 2 == 1 else -1.0
+	var c := ("dodge_l" if side > 0.0 else "dodge_r") if what == "step" else "dive_roll"
+	var r := man._root(c, man._len(c))
+	var yaw := atan2(st.dir.x, st.dir.y) + (side * 0.5 if what == "dive" else 0.0)
+	var lat := (Basis(Vector3.UP, yaw) * Vector3(r.x, 0.0, r.y)).dot(Vector3(st.n.x, 0.0, st.n.y))
+	return -(signf(lat) if absf(lat) > 0.3 else side) * 2.2
 
 func _park_away(c: Dictionary) -> void:
 	if c.box >= 0:
@@ -942,21 +1047,6 @@ func _street(dt: float, t: float) -> void:
 				mode = "after"
 			if mode == "after" and tmr > 2.2:
 				d.end_after(t, 0.3)
-		"hit":
-			# hit: thrown, turning over, and dark before he comes down
-			var v: Vector3 = fl.fall_v
-			v.y -= 9.81 * dt
-			fl.fall_v = v
-			fl.fall_p = (fl.fall_p as Vector3) + v * dt
-			man.position = (fl.fall_p as Vector3) - Basis(Vector3.UP, man.yaw) * man.clip_hips(fl.clip, man.ct)
-			man.rotation.y = man.yaw
-			man.animate(dt)
-			var hl := man.skel.get_bone_pose_position(0)
-			var B := Basis(Vector3.RIGHT, tmr * 7.0)
-			man.body.transform = Transform3D(B, hl - B * hl)
-			if tmr > 0.42 and not d.events.has("caught"):
-				d.mark("caught", t)
-				d.end_after(t, 0.45)
 
 ## Where along the street and how far to its side he now is.
 func _street_resync() -> void:
@@ -1002,7 +1092,8 @@ func _street_move(e: Dictionary, t: float) -> void:
 			kick_cam = {"at": Vector3(cp.x, float(st.y), cp.y)}
 			d.mark("plant", t)
 
-## The cars: each on its line, timed to reach him at its moment; the ones he got away from spin out once past.
+## The cars: each from where it waited, timed to reach him at its moment (off as late as it can, flat out as it gets
+## there; the last one braking to a stop behind him); the ones he got away from spin out once past.
 func _street_cars(dt: float, t: float) -> void:
 	var dir: Vector2 = st.dir
 	var kick_at := 99.0
@@ -1023,25 +1114,39 @@ func _street_cars(dt: float, t: float) -> void:
 				aim += 0.9 + float(c.size.x) * 0.5 if e.what == "kick" else -5.5
 			e.s_meet = aim if not e.get("aimed", false) else lerpf(float(e.s_meet), aim, 1.0 - exp(-dt / 0.35))
 			e.aimed = true
-			e.lane = st_off
+			e.lane = st_off + float(e.lane_off)
 		elif not e.fixed:
 			e.fixed = true
 		var v: float = e.v
+		var D: float = float(e.s_meet) - float(e.start)
+		var L := maxf(absf(D), 0.01)
 		var along: float
-		if e.what == "brake":
-			# it comes up behind him and stops short, braking hard over the last 1.2 s
-			if left > 1.2:
-				along = float(e.s_meet) - 0.6 * v - v * (left - 1.2)
-			else:
-				along = float(e.s_meet) - 0.5 * v / 1.2 * maxf(left, 0.0) * maxf(left, 0.0)
+		var x := 1.0
+		if e.has("skid"):
+			# it hit him: braking hard to a stop
+			var tau := minf(st_t - float(e.skid[1]), v / 9.0)
+			along = float(e.skid[0]) + float(e.from) * (v * tau - 4.5 * tau * tau)
+		elif e.what == "brake":
+			var T := maxf(minf(1.5 * L / v, tm), 0.05)
+			x = (st_t - (tm - T)) / T
+			var xc := clampf(x, 0.0, 1.0)
+			along = float(e.start) + D * xc * xc * (3.0 - 2.0 * xc)
 		else:
-			along = float(e.s_meet) - float(e.from) * v * left
+			var T := maxf(minf(2.0 * L / v, tm), 0.05)
+			var a := clampf(2.0 - v * T / L, 0.0, 1.0)
+			x = (st_t - (tm - T)) / T
+			var f: float
+			if x <= 1.0:
+				var xc := maxf(x, 0.0)
+				f = a * xc + (1.0 - a) * xc * xc
+			else:
+				f = 1.0 + (2.0 - a) * (x - 1.0)
+			along = float(e.start) + D * f
 		var heading := dir * float(e.from)
-		var p := _street_at(along, float(e.lane))
+		var p := _street_at(along, lerpf(float(e.lane0), float(e.lane), _ease(clampf(x * 1.6, 0.0, 1.0))))
 		c.pos = p
 		c.yaw = atan2(-heading.y, heading.x)
 		c.y = float(st.y)
-		(c.node as Node3D).visible = along > -float(st.behind) - 4.0 and along < float(st.ahead) + 4.0
 		g.veh._apply(c)
 		var gap := absf(along - st_s)
 		if gap < 4.0 and not e.has("passed_mark") and e.what != "brake":
@@ -1054,24 +1159,19 @@ func _street_cars(dt: float, t: float) -> void:
 					g.veh.knock(c, dir, 1.7)
 					fx.burst("impact", hit, Vector3(dir.x, 0.6, dir.y))
 					shake = maxf(shake, 0.45)
+					kick_cam.car = c
+					kick_cam.k_tmr = tmr
 					d.mark("kick", t)
 			"hit":
-				if left <= float(c.size.x) * 0.5 / v and mode == "street":
+				if left <= float(c.size.x) * 0.5 / v and mode == "street" and not e.has("skid"):
 					# it gets him (its nose, not its middle): thrown along its way and up
-					var c2 := "gap_jump"
-					man.jump(c2, 0.86, 0.06)
-					man.jump_rate = 0.0
-					fl = {"clip": c2, "fall_p": _hips(), "fall_v": Vector3(heading.x, 0.0, heading.y) * v * 0.85 + Vector3(0, 6.5, 0)}
-					mode = "hit"
-					tmr = 0.0
 					fx.burst("impact", _hips(), Vector3(heading.x, 0.5, heading.y))
-					kick_cam = {"at": Vector3(p.x, float(st.y), p.y) + Vector3(heading.x, 0.0, heading.y) * 3.0}
 					shake = maxf(shake, 0.5)
-					e.what = "brake"
-					e.s_meet = along + 7.0
-					e.t = st_t + 1.0
-					e.fixed = true
+					kick_cam = {"at": Vector3(p.x, float(st.y), p.y) + Vector3(heading.x, 0.0, heading.y) * 3.0, "hit": true}
+					e.skid = [along, st_t]
 					d.mark("hit", t)
+					man.yaw = atan2(heading.x, heading.y)
+					_thrown(Vector3(heading.x, 0.0, heading.y) * v * 0.7 + Vector3(0, 5.5, 0), 9.81, 1.0, float(st.y), _hips())
 			"step", "dive", "vault":
 				if left < -0.7 and not e.past:
 					# past him: it spins out
@@ -1082,6 +1182,57 @@ func _street_cars(dt: float, t: float) -> void:
 						away = 1.0 if randf() < 0.5 else -1.0
 					g.veh.shove(c, heading * v * 0.6 + (st.n as Vector2) * away * randf_range(6.0, 7.5), randf_range(1.6, 2.8) * away)
 					d.mark("spin_%d" % e.i, t)
+
+# ---------------------------------------------------------------- thrown: hit by a car, or off a wall
+## Thrown: turning over (whole turns, so he comes down the right way up), down hard, rolls with it and gets up.
+func _thrown(vel: Vector3, gr: float, sgn: float, floor_y: float, hips: Vector3) -> void:
+	man.jump("gap_jump", 0.86, 0.06)
+	man.jump_rate = 0.0
+	var T := (vel.y + sqrt(maxf(vel.y * vel.y + 2.0 * gr * maxf(hips.y - floor_y - 0.45, 0.0), 0.0))) / gr
+	fl = {"clip": "gap_jump", "fall_p": hips, "fall_v": vel, "g": gr, "floor": floor_y, "sgn": sgn,
+		"spin": TAU * maxf(1.0, roundf(T * 6.0 / TAU)) / maxf(T, 0.1)}
+	mode = "thrown"
+	tmr = 0.0
+
+func _thrown_step(dt: float, t: float) -> void:
+	if mode == "thrown":
+		var v: Vector3 = fl.fall_v
+		v.y -= float(fl.g) * dt
+		fl.fall_v = v
+		fl.fall_p = (fl.fall_p as Vector3) + v * dt
+		man.position = (fl.fall_p as Vector3) - Basis(Vector3.UP, man.yaw) * man.clip_hips(fl.clip, man.ct)
+		man.rotation.y = man.yaw
+		man.animate(dt)
+		var hl := man.skel.get_bone_pose_position(0)
+		var B := Basis(Vector3.RIGHT, tmr * float(fl.spin) * float(fl.sgn))
+		man.body.transform = Transform3D(B, hl - B * hl)
+		if (fl.fall_p as Vector3).y <= float(fl.floor) + 0.45 and v.y < 0.0:
+			# down: it cracks the ground; he rolls with it, the way he was going, and comes up on his feet
+			man.body.transform = Transform3D()
+			var at := Vector3(man.position.x, float(fl.floor), man.position.z)
+			impact(at, 0.9, float(fl.floor))
+			shake = 0.5
+			d.mark("crash", t)
+			if Vector2(v.x, v.z).length() > 0.3:
+				man.yaw = atan2(v.x, v.z)
+			man.jump("dive_roll", float(man.meta.dive_roll.get("land", 0.9)) + 0.05, 0.1)
+			mode = "getup"
+			tmr = 0.0
+			kick_cam.getup = at
+		return
+	var step := man.move(dt, Vector2(), 0.0, false)
+	man.position += step
+	man.position.y = float(fl.floor)
+	man.rotation.y = man.yaw
+	man.animate(dt)
+	if man.state == Man.JUMP and man.ct >= man._len("dive_roll") - 0.45:
+		man._to(Man.IDLE, 0.45)
+		man.speed = 0.0
+		man.idle_t = 0.0
+	if tmr > 0.9 and not d.events.has("fail"):
+		d.mark("fail", t)
+	if tmr > 3.4:
+		d.end_after(t, 0.2)
 
 # ---------------------------------------------------------------- slow motion and the camera
 ## The time scale wanted now: slow in the crouch, the flip and the impact, full speed in between, eased.
@@ -1096,10 +1247,8 @@ func step(t: float) -> void:
 				var k := man.ct - float(man.meta.kick.hit)
 				if k > -0.16 and k < 0.45:
 					want = 0.35
-			"hit":
+			"thrown":
 				want = 0.4 if tmr < 0.3 else 1.0
-			"falling":
-				want = 0.45 if tmr < 0.3 else 1.0
 	elif m.slow:
 		match mode:
 			"air":
@@ -1141,7 +1290,7 @@ func cut(_t: float) -> String:
 	return shot
 
 const SHOTS := ["sr_chase", "sr_launch", "sr_after", "sr_hop", "sr_orbit", "sr_land", "sr_dive", "sr_ground",
-	"sc_air", "sc_front", "sc_back", "sc_kick", "sc_fall"]
+	"sc_air", "sc_front", "sc_back", "sc_kick", "sc_fall", "sc_getup"]
 
 ## The chase: behind him on the roofs and through the air; the street drop seen from below; in the street ahead
 ## of him looking back while a car comes up behind, behind him while one comes at him; beside the kick (or the hit).
@@ -1155,11 +1304,13 @@ func _chase_cut(m: Dictionary) -> String:
 			return "sc_air"
 		"land":
 			return "sc_air"
-		"falling":
-			return "sc_fall"
+		"thrown":
+			return "sc_kick" if not st.is_empty() else "sc_fall"
+		"getup":
+			return "sc_getup"
 		"hero", "end":
 			return "sr_ground"
-		"kick", "after", "hit":
+		"kick", "after":
 			return "sc_kick"
 	for e in cars_on:
 		if not e.past and e.what != "brake":
@@ -1264,23 +1415,52 @@ func camera(mode_name: String, t: float) -> Array:
 				look = at + sd * 7.0 + Vector3(0, 0.8, 0)
 			fov = 74.0
 		"sc_kick":
-			# fixed beside it, between him and the car
 			var sd := Vector3(st.dir.x, 0.0, st.dir.y)
 			var sn := Vector3(st.n.x, 0.0, st.n.y)
 			var at: Vector3 = kick_cam.get("at", hips)
-			if not kick_cam.has("pos"):
-				# whichever side of the street has room; if neither does, over his shoulder (where he ran from)
-				var from := at + Vector3(0, 1.0, 0)
-				var best := d.pulled(from, at - sd * 5.0 + sn * 1.6 + Vector3(0, 1.4, 0)) as Vector3
-				for side in [1.0, -1.0]:
-					var q: Vector3 = d.pulled(from, at + sn * side * 5.2 - sd * 1.2 + Vector3(0, 1.0, 0))
-					if q.distance_to(from) > 4.6 and q.distance_to(from) > best.distance_to(from) - 0.5:
-						best = q
-						break
-				kick_cam.pos = best
-			pos = kick_cam.pos
-			look = (at + Vector3(0, 0.9, 0)).lerp(hips, 0.5) if mode != "hit" else hips
-			fov = 66.0
+			var from := at + Vector3(0, 1.0, 0)
+			if kick_cam.has("hit"):
+				# fixed beside where the car gets him
+				if not kick_cam.has("pos"):
+					kick_cam.pos = d.pulled(from, at + sn * 5.2 - sd * 1.2 + Vector3(0, 1.1, 0))
+				pos = kick_cam.pos
+				look = hips
+				fov = 64.0
+			else:
+				# low over his shoulder, swinging round to his side and pushing in as the car comes (in slow
+				# motion), then after the car as it goes end over end
+				if not kick_cam.has("side"):
+					var room := 0.0
+					kick_cam.side = 0.0
+					for sg in [1.0, -1.0]:
+						var q: Vector3 = d.pulled(from, at + sn * sg * 4.8 + Vector3(0, 1.0, 0))
+						if q.distance_to(from) > maxf(room + 0.3, 3.5):
+							room = q.distance_to(from)
+							kick_cam.side = sg
+				var sg: float = kick_cam.side
+				var k := _ease(tmr / 1.3)
+				var a0 := Vector2(-3.6, 1.3)
+				var a1 := Vector2(-0.4, 4.6) if sg != 0.0 else Vector2(-4.4, 0.9)
+				var ang := lerp_angle(a0.angle(), a1.angle(), k)
+				var o := Vector2(cos(ang), sin(ang)) * lerpf(a0.length(), a1.length(), k)
+				pos = d.pulled(from, at + sd * o.x + sn * o.y * (sg if sg != 0.0 else 1.0) + Vector3(0, lerpf(0.55, 0.85, k), 0))
+				look = at + Vector3(0, 0.9, 0) + sd * 1.2
+				fov = lerpf(62.0, 50.0, k)
+				if kick_cam.has("car"):
+					var cp: Vector3 = g.veh.xform(kick_cam.car).origin + Vector3(0, 0.6, 0)
+					var kk := _ease((tmr - float(kick_cam.k_tmr)) / 0.7)
+					look = look.lerp(cp, kk * 0.7)
+					fov = lerpf(fov, 66.0, kk)
+		"sc_getup":
+			# low, a few metres off, where he came down: he rolls and gets up
+			var at: Vector3 = kick_cam.get("getup", hips)
+			if not kick_cam.has("gpos"):
+				var f := Vector3(sin(man.yaw), 0.0, cos(man.yaw))
+				var sdv := Vector3(-f.z, 0.0, f.x)
+				kick_cam.gpos = d.pulled(at + Vector3(0, 1.0, 0), at + f * 3.2 + sdv * 3.0 + Vector3(0, 1.1, 0))
+			pos = kick_cam.gpos
+			look = hips + Vector3(0, 0.1, 0)
+			fov = 58.0
 		"sr_hop":
 			# beside the edge, low on the lower roof
 			var lo := minf(float(m.h_from), float(m.h_to))
@@ -1291,7 +1471,7 @@ func camera(mode_name: String, t: float) -> Array:
 	# never inside a building: pulled in short of the first wall between him and the camera
 	if mode_name in ["sc_front", "sc_back"]:
 		pos = d.pulled(Vector3(hips.x, float(st.y) + 1.0, hips.z), pos)
-	elif mode_name != "sr_chase" and mode_name != "sr_after" and mode_name != "sc_kick" and mode_name != "sc_fall":
+	elif not mode_name in ["sr_chase", "sr_after", "sc_kick", "sc_fall", "sc_getup"]:
 		pos = d.pulled(hips, pos)
 	# the shake of a hard landing
 	if shake > 0.0:

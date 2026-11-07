@@ -165,7 +165,9 @@ def effects(name, n):
     if name == "sniff":
         return [("growl_3", 0.45, 0.3, 0.8)]
     if name == "fail":
-        return [("stinger", 0.8, 0.35, 1), ("SUB", 0.6, 0.3, 1)]
+        return [("stinger", 0.8, 0, 1)]
+    if name == "crash":
+        return [("thud_3", 1.0, 0, 0.8), ("boom_1", 0.7, 0, 0.9), ("SUB", 0.9, 0, 1), ("step_dry_4", 0.8, 0.3, 0.8)]
     if name.startswith("slow_on"):
         return [("whoosh", 0.7, 0, 0.5)]
     # a superhero: blasting off, turning over in the air, coming down hard enough to crack the roof
@@ -225,10 +227,7 @@ def main():
     ev = dict(events)
     meta = a.out[:-4] + ".txt"
     with open(meta, "w", encoding="utf-8") as fh:
-        fh.write(metadata(a.recipe, a.seed, "caught" in ev))
-    if a.recipe == "superchase":
-        # (no creature in it: the cut to black is quiet)
-        events = [(n, t) for n, t in events if n != "caught"] + ([("fail", ev["caught"])] if "caught" in ev else [])
+        fh.write(metadata(a.recipe, a.seed, "caught" in ev or "fail" in ev))
     dur = float(probe(a.clip, "format=duration")) - pre
     has_audio = bool(probe(a.clip, "stream=index", "a"))
     # nobody dies on screen: if the creature gets him, cut to black a moment after and hold it under the sound
@@ -326,8 +325,8 @@ def main():
 
     if HOOK.get(a.recipe):
         cap(HOOK[a.recipe], 0.1, 1.5)
-    if a.recipe == "superchase" and "caught" in ev:
-        cap("FAIL", vend + 0.15, total, 220, "(h-text_h)/2")
+    if "fail" in ev:
+        cap("FAIL", ev["fail"], total, 220, "h*0.3")
     if a.recipe == "domino":
         n = 0
         for name, t in events:

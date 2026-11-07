@@ -11,6 +11,8 @@
 ## --mode=gapjump   he runs over a roof and leaps the alley onto the next, lower roof (slow motion in the air)
 ## --mode=roofrun   he sprints along a row of roofs, leaping down and up from one to the next, turns at the end
 ##                  of the block, leaps the alley and sprints back along the roofs on the other side
+## --mode=superrun  a superhero over the city's roofs: blasts up onto roofs 20 m higher, dives off them, flips,
+##                  cracks the roof with superhero landings, and drops off the last one to the street
 ## --seed=N         where in the city it happens (and the small random choices)
 ## --fps=N          frames recorded a second (the same as Godot's --fixed-fps); compose.py blends them into motion blur
 ## Do not call a flag --shot, --frames, --day, --play, --loc or --stats: the game itself reads those (--shot=x quits it after 60 frames).
@@ -24,6 +26,7 @@
 extends SceneTree
 
 const FX := preload("res://tests/short_fx.gd")
+const SR := preload("res://tests/short_super.gd")
 const MAX_LEN := 34.0
 const LUNGES := [3.4, 7.2, 11.0, 14.8, 18.6]   # nearmiss: when its jaws snap shut, short of the boot
 const BITES := [10.5, 13.6]        # flip: when its jaws close on the boot (the second lifts the car)
@@ -126,6 +129,7 @@ var rr_down := 0.0
 var rr_toe := [0.0, 0.0]      # the stride phase at which each foot (left, right) leaves the ground, sprinting
 var rr_steps := 0
 var rr_t := 0.0               # game seconds since he set off
+var sr = null                 # superrun (tests/short_super.gd)
 
 ## Runs after the game's own _process (higher priority number = later): puts the car and the creature where the
 ## shot wants them and takes the camera over.
@@ -192,6 +196,8 @@ func _process(dt: float) -> bool:
 			step_gapjump(t)
 		"roofrun":
 			step_roofrun(t)
+		"superrun":
+			sr.step(t)
 		_:
 			step_flip(t, dt)
 	if walk:
@@ -209,7 +215,7 @@ func _process(dt: float) -> bool:
 	if t >= trace_at:
 		trace_at += 0.5
 		log_trace(t)
-	if (done_at >= 0.0 and t >= done_at) or t >= MAX_LEN:
+	if (done_at >= 0.0 and t >= done_at) or t >= (75.0 if recipe == "superrun" else MAX_LEN):
 		Engine.time_scale = 1.0
 		mark("end", t)
 		print("shot %s done: phase %s, creature %s" % [recipe, g.phase, g.mon.state])
@@ -234,6 +240,10 @@ func after_game(dt: float) -> void:
 		g.pl.actor.visible = false
 		g.mon.actor.visible = false
 		drive_runner(dt)
+	if recipe == "superrun":
+		g.pl.actor.visible = false
+		g.mon.actor.visible = false
+		sr.drive(dt)
 	if downed:
 		# it stays down: the death clip held on its last frame
 		var a: Rex = g.mon.actor
@@ -335,6 +345,17 @@ func setup() -> void:
 			setup_gapjump()
 		"roofrun":
 			setup_roofrun()
+		"superrun":
+			g.mon.awareness = 0.0
+			walk = true
+			rpath = [Vector2(-g.bound + 4.0, -g.bound + 4.0), Vector2(-g.bound + 6.0, -g.bound + 4.0)]
+			rs = 0.0
+			rspeed = 0.0
+			sr = SR.new(self)
+			if not sr.setup():
+				push_error("superrun: no route")
+				quit(1)
+				return
 		_:
 			setup_chase(p)
 	print("shot %s, seed %d, player at %s, creature at %s" % [recipe, seed_n, Vector2(g.pl.pos.x, g.pl.pos.z).round(), Vector2(g.mon.pos.x, g.mon.pos.z).round()])
@@ -1767,6 +1788,11 @@ func _rr_set_roofs() -> void:
 	var edits := []
 	for L in rr.lots:
 		edits.append([L.box, float(L.h0), float(L.h)])
+	_set_roofs(edits)
+
+## Roofs moved and cleared (see _rr_set_roofs): edits [[box in the city data, its height, the height wanted]];
+## the same height just clears the roof.
+func _set_roofs(edits: Array) -> void:
 	for mi in g.world.find_children("*", "MeshInstance3D", true, false):
 		var nm := String(mi.name)
 		if nm != "build" and nm != "props":
@@ -1810,7 +1836,7 @@ func _rr_set_roofs() -> void:
 		var m2 := ArrayMesh.new()
 		m2.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 		(mi as MeshInstance3D).mesh = m2
-		print("roofrun: %s mesh: %d points moved (facade %.4f per m)" % [nm, moved, k])
+		print("roofs: %s mesh: %d points moved (facade %.4f per m)" % [nm, moved, k])
 	for e in edits:
 		e[0][3] = e[2]
 
@@ -2132,6 +2158,8 @@ func _rr_clear(L: Dictionary, c: String, hips0: Vector3, u: Vector3, vh: float, 
 func cut(t: float) -> String:
 	var slowing := slow_until >= 0.0
 	match recipe:
+		"superrun":
+			return sr.cut(t)
 		"roofrun":
 			# behind him as he runs; side on at each edge as he leaps it, from above the alley for the alley;
 			# ahead of him as he pulls up
@@ -2408,6 +2436,11 @@ func camera(t: float, dt: float) -> void:
 				pos = on_b + d3 * 5.0 + n3 * 1.1 + Vector3(0, 0.9, 0)
 				look = on_b + Vector3(0, 1.0, 0) - d3 * 1.5
 				fov = 62.0
+		"sr_chase", "sr_after", "sr_launch", "sr_orbit", "sr_land", "sr_dive", "sr_ground", "sr_hop":
+			var cam: Array = sr.camera(mode, t)
+			pos = cam[0]
+			look = cam[1]
+			fov = cam[2]
 		"rr_chase", "rr_leap", "rr_alley", "rr_end":
 			var hips := man.skel.global_transform * man.skel.get_bone_global_pose(0).origin
 			var d2 := _rr_dir(rr_s) if rr_mode != "air" else Vector2(sin(man.yaw), cos(man.yaw))

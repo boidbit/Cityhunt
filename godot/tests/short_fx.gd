@@ -28,7 +28,8 @@ func _init(p_g: Game) -> void:
 
 # ---------------------------------------------------------------- impacts
 ## A burst at `at`, thrown out around `dir`. kind: bite (the jaws on the boot), impact (a hard hit), land (a
-## car coming down on its roof), toss (a parked car thrown aside).
+## car coming down on its roof), toss (a parked car thrown aside), shock (a man coming down hard enough to crack
+## a roof: a ring of dust along the ground and grit), puff (feet pushing off hard).
 func burst(kind: String, at: Vector3, dir: Vector3) -> void:
 	match kind:
 		"bite":
@@ -45,6 +46,12 @@ func burst(kind: String, at: Vector3, dir: Vector3) -> void:
 			_glass(at + Vector3(0, 0.6, 0), Vector3.UP, 60)
 			_debris(at + Vector3(0, 0.5, 0), Vector3.UP, 12)
 			_sparks(at + Vector3(0, 0.3, 0), Vector3.UP, 50)
+		"shock":
+			_ring(at, 56, 1.0)
+			_debris(at + Vector3(0, 0.25, 0), Vector3.UP, 22, at.y)
+			_dust(at, 14, 0.8)
+		"puff":
+			_ring(at, 20, 0.45)
 		"toss":
 			_dust(Vector3(at.x, 0.3, at.z), 24, 1.2)
 			_glass(at, dir, 50)
@@ -74,7 +81,25 @@ func _glass(at: Vector3, dir: Vector3, n: int) -> void:
 	mesh.material = _mat("glass")
 	_emit(at, n, 2.2, mesh, m, true)
 
-func _debris(at: Vector3, dir: Vector3, n: int) -> void:
+## Dust thrown out flat along the ground in a ring, slowing as it spreads.
+func _ring(at: Vector3, n: int, size: float) -> void:
+	var m := _pm(Vector3.UP, 12.0, 0.4, 1.6 * size, -0.2)
+	m.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_RING
+	m.emission_ring_axis = Vector3.UP
+	m.emission_ring_radius = 0.6 * size
+	m.emission_ring_inner_radius = 0.3 * size
+	m.emission_ring_height = 0.1
+	m.radial_velocity_min = 7.0 * size
+	m.radial_velocity_max = 13.0 * size
+	m.damping_min = 5.0
+	m.damping_max = 8.0
+	m.scale_min = 1.4 * size
+	m.scale_max = 2.8 * size
+	m.scale_curve = _curve(0.6, 1.8)
+	m.color_ramp = _ramp(Color(0.6, 0.57, 0.52), 0.6)
+	_emit(at + Vector3(0, 0.2, 0), n, 2.4, _puff(), m, false)
+
+func _debris(at: Vector3, dir: Vector3, n: int, floor_y := NAN) -> void:
 	var m := _pm(dir, 55.0, 3.0, 6.5, 9.8)
 	m.particle_flag_rotate_y = true
 	m.angular_velocity_min = -400.0
@@ -85,7 +110,7 @@ func _debris(at: Vector3, dir: Vector3, n: int) -> void:
 	var mesh := BoxMesh.new()
 	mesh.size = Vector3(0.22, 0.05, 0.15)
 	mesh.material = _mat("debris")
-	_emit(at, n, 2.6, mesh, m, true)
+	_emit(at, n, 2.6, mesh, m, true, floor_y)
 
 func _dust(at: Vector3, n: int, size: float) -> void:
 	var m := _pm(Vector3.UP, 80.0, 1.5, 4.5, -0.4)
@@ -120,7 +145,7 @@ func _dust_emitter(n: int, life: float, s0: float, s1: float) -> GPUParticles3D:
 	root.add_child(p)
 	return p
 
-func _emit(at: Vector3, n: int, life: float, mesh: Mesh, m: ParticleProcessMaterial, collide: bool) -> void:
+func _emit(at: Vector3, n: int, life: float, mesh: Mesh, m: ParticleProcessMaterial, collide: bool, floor_y := NAN) -> void:
 	var p := GPUParticles3D.new()
 	p.one_shot = true
 	p.explosiveness = 0.95
@@ -136,10 +161,11 @@ func _emit(at: Vector3, n: int, life: float, mesh: Mesh, m: ParticleProcessMater
 	p.emitting = true
 	_free_later(p, life + 1.0)
 	if collide:
-		# the street, for the bits to bounce and settle on
+		# the street (or the roof given), for the bits to bounce and settle on
 		var box := GPUParticlesCollisionBox3D.new()
 		box.size = Vector3(40, 2, 40)
-		box.position = Vector3(at.x, g.world.ground_at(at.x, at.z, 0.0) - 1.0, at.z)
+		var fy: float = floor_y if not is_nan(floor_y) else g.world.ground_at(at.x, at.z, 0.0)
+		box.position = Vector3(at.x, fy - 1.0, at.z)
 		root.add_child(box)
 		_free_later(box, life + 1.0)
 

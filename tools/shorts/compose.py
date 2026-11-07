@@ -21,7 +21,8 @@ WHOOSH = os.path.join(ROOT, "getaway", "assets", "sounds", "whoosh.wav")
 FONT = os.path.join(ROOT, "getaway", "assets", "fonts", "BigShouldersDisplay.ttf")
 
 HOOK = {"flip": "WAIT FOR IT", "ram": "CAR VS T-REX", "nearmiss": "TOO CLOSE", "freeze": "DO NOT MOVE", "domino": "",
-        "hunter": "HUNT IT DOWN", "gapjump": "DON'T LOOK DOWN", "roofrun": "HOW FAR CAN HE GO?"}
+        "hunter": "HUNT IT DOWN", "gapjump": "DON'T LOOK DOWN", "roofrun": "HOW FAR CAN HE GO?",
+        "superrun": "NOTHING CAN STOP HIM"}
 
 # What to paste into YouTube for each Short: a title picked by the seed (so two videos of one recipe differ),
 # a description and tags. Titles stay under 100 characters; no film or car brand names.
@@ -42,6 +43,8 @@ TITLES = {
                 "Would You Make This Jump? 🏃💨", "Don't Look Down… 😰"],
     "roofrun": ["Rooftop Run at Full Speed 🏃💨", "Roof to Roof Without Stopping 😳", "How Far Can He Go? 🏙️",
                 "Flat Out Over the Rooftops 😱", "One Run, Every Roof 🏃🏙️"],
+    "superrun": ["He Jumped 20 Floors Up 😳", "Superhero Run Across the City 🦸", "Nothing Can Stop Him 💥",
+                 "The Landing at the End 😱", "Day 1 With Superpowers 🦸💥"],
 }
 STORY = {
     "flip": "A T-Rex chases a car through an empty city, bites it twice and throws it over. Watch it in slow motion.",
@@ -54,12 +57,15 @@ STORY = {
                "(3D animation: motion-captured movement in a game engine city.)",
     "roofrun": "Flat out along the rooftops: down a floor, up a floor, across the alley and back, without "
                "stopping. (3D animation: motion-captured movement in a game engine city.)",
+    "superrun": "Across the city over its roofs: up twenty metres in one leap, off the top again, flips, superhero "
+                "landings, and a drop all the way to the street. (3D animation made in a game engine.)",
 }
 QUESTION = {
     "flip": "Would you have made it out? 👇", "ram": "Who won this one? 👇", "domino": "How many did you count? 👇",
     "nearmiss": "Closest call you've seen? 👇", "freeze": "Could you stay still? 👇", "hunter": "Round three? 👇",
     "gapjump": "Would you make this jump? 👇",
     "roofrun": "Which leap was the hardest? 👇",
+    "superrun": "Which power should he get next? 👇",
 }
 # (a rooftop leap has nothing to do with dinosaurs: its own tags)
 PARKOUR_TAGS = ["parkour", "rooftop", "rooftop jump", "free running", "stunt", "slow motion", "3d animation", "cgi",
@@ -72,11 +78,12 @@ RECIPE_TAGS = {
     "freeze": ["hiding", "suspense", "asmr", "stealth"], "hunter": ["car vs dinosaur", "t rex knockout", "head on crash"],
     "gapjump": ["gap jump", "roof jump", "high jump"],
     "roofrun": ["rooftop run", "roof run", "sprint", "parkour run"],
+    "superrun": ["superhero", "superpowers", "super jump", "superhero landing", "flip"],
 }
 HASHTAGS = {"flip": "#trex #dinosaur #slowmotion", "ram": "#trex #dinosaur #carcrash", "domino": "#trex #satisfying #dinosaur",
             "nearmiss": "#trex #dinosaur #closecall", "freeze": "#trex #dinosaur #suspense",
             "hunter": "#trex #dinosaur #carcrash", "gapjump": "#parkour #rooftop #slowmotion",
-            "roofrun": "#parkour #rooftop #freerunning"}
+            "roofrun": "#parkour #rooftop #freerunning", "superrun": "#superhero #superpowers #slowmotion"}
 
 
 def metadata(recipe, seed):
@@ -84,7 +91,7 @@ def metadata(recipe, seed):
     titles = TITLES.get(recipe, ["T-Rex in the City 🦖"])
     title = titles[seed % len(titles)] + " #shorts"
     desc = "%s\n\n%s\n\n#shorts %s" % (STORY.get(recipe, ""), QUESTION.get(recipe, ""), HASHTAGS.get(recipe, "#trex"))
-    tags = ", ".join(RECIPE_TAGS.get(recipe, []) + (PARKOUR_TAGS if recipe in ("gapjump", "roofrun") else TAGS))
+    tags = ", ".join(RECIPE_TAGS.get(recipe, []) + (PARKOUR_TAGS if recipe in ("gapjump", "roofrun", "superrun") else TAGS))
     return "TITLE\n%s\n\nDESCRIPTION\n%s\n\nTAGS\n%s\n" % (title, desc, tags)
 
 
@@ -120,6 +127,18 @@ def effects(name, n):
         return [("growl_3", 0.45, 0.3, 0.8)]
     if name.startswith("slow_on"):
         return [("whoosh", 0.7, 0, 0.5)]
+    # a superhero: blasting off, turning over in the air, coming down hard enough to crack the roof
+    if name.startswith("launch"):
+        return [("boom_1", 0.9, 0, 0.75), ("SUB", 1.0, 0, 1), ("whoosh", 0.9, 0.05, 0.6), ("thud_3", 0.8, 0, 0.7)]
+    if name.startswith("crouch"):
+        return [("step_dry_3", 0.8, 0, 0.8)]
+    if name.startswith("flip"):
+        return [("whoosh", 0.75, 0, 1.0)]
+    if name.startswith("impact"):
+        return [("thud_2", 1.0, 0, 0.8), ("boom_1", 0.6, 0, 0.9), ("SUB", 0.8, 0, 1), ("clang_1", 0.35, 0.03, 0.8)]
+    if name.startswith("slam"):
+        return [("boom_2", 1.0, 0, 0.75), ("SUB", 1.0, 0, 1), ("thud_3", 1.0, 0.01, 0.65), ("shatter_2", 0.6, 0.04, 0.8),
+                ("clang_3", 0.5, 0.06, 0.8)]
     # a man on a roof: his footsteps, the push off the edge, and the landing a floor lower
     if name.startswith("step"):
         return [("step_dry_%d" % (n % 4 + 1), 0.55, 0, 1)]
@@ -200,7 +219,7 @@ def main():
     # (atrim by name: its second positional option is another start, not the end)
     filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,apad,volume=1.0[ga]" % (game_in, vend))
     # (up on a roof the wind is the loudest thing there is)
-    wind = 0.45 if a.recipe in ("gapjump", "roofrun") else 0.2
+    wind = 0.45 if a.recipe in ("gapjump", "roofrun", "superrun") else 0.2
     filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,volume=%.2f[amb]" % (wind_in, total, wind))
     idx = wind_in + 1
     count = {}
@@ -221,6 +240,18 @@ def main():
                         % (idx, p, gain, int(start * 1000), idx))
             mix.append("[s%d]" % idx)
             idx += 1
+    # superrun: the car alarms the last landing sets off in the street
+    if a.recipe == "superrun":
+        slams = [t for name, t in events if name.startswith("slam")]
+        if slams:
+            for k, delay in enumerate((0.35, 0.9)):
+                start = slams[-1] + delay
+                if start < total:
+                    inputs += ["-stream_loop", "2", "-i", snd("alarm_loop")]
+                    filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,volume=%.2f,adelay=%d:all=1[s%d]"
+                                % (idx, max(total - start, 0.1), 0.35 - k * 0.12, int(start * 1000), idx))
+                    mix.append("[s%d]" % idx)
+                    idx += 1
     # the heartbeat, from when it comes near to when it has gone
     on = ev.get("heart_on", vend)
     off = ev.get("heart_off", vend)

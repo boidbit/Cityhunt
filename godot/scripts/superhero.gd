@@ -61,7 +61,17 @@ var cars_on: Array = []      # the cars after him (see _street_begin)
 var kick_cam := {}
 var want_len := 0.0          # seconds of video wanted (0: as long as it takes): how many roofs, how many cars
 var all_stunts := false     # every street stunt in the one video (in the seed's order), not just a few
-var relax := false           # no route with all the street it wants: take one with less
+var relax := false
+# the game's Superhero Run (play): every stunt waits for the player's swipe or tap; too late and it goes wrong
+var play := false
+var lives := 3
+var score := 0
+var rage := 0.0              # 0..1: filled by stunts done in time; full, he may crush the last car
+var ask := {}                # the prompt: g (up, down, side, tap), ok, t0, t1 (video seconds)
+var flash := ""
+var flash_until := 0.0
+var perfect_until := -1.0
+const GESTURE := {"step": "side", "crash2": "side", "dive": "down", "hide": "down", "vault": "up", "roofstep": "up", "kick": "tap"}           # no route with all the street it wants: take one with less
 
 func _init(p_d) -> void:
 	d = p_d
@@ -447,6 +457,9 @@ func drive(dt: float) -> void:
 func _run(dt: float, t: float, m: Dictionary) -> void:
 	var want := SPRINT
 	var left: float = float(seg.len) - s
+	if play and int(ask.get("mi", -1)) != mi and left < 9.0:
+		_ask("up", left / SPRINT, true)
+		ask.mi = mi
 	if m.kind == "mega" and left < 3.2:
 		want = 3.2
 	var before := fposmod(man.phase, 1.0)
@@ -466,7 +479,9 @@ func _run(dt: float, t: float, m: Dictionary) -> void:
 		_hero_pose(hero_w)
 	left = float(seg.len) - s
 	if m.kind == "mega":
-		if left < 0.35:
+		if left < 0.35 and play and not ask.get("ok", false):
+			_miss_edge(t, m)
+		elif left < 0.35:
 			# pull up and sink into a crouch: the leap clip's own landing crouch, deeper
 			man.jump("gap_jump", float(man.meta.gap_jump.land) + 0.06, 0.16)
 			man.jump_rate = 0.0
@@ -480,10 +495,13 @@ func _run(dt: float, t: float, m: Dictionary) -> void:
 	for f in 2:
 		var ph: float = toe[f]
 		var crossed: bool = (before < ph and after >= ph) or (before > after and (before < ph or after >= ph))
-		if crossed and edge - s - man._stride(man.speed) * 0.5 < 0.2 and mode == "run":
+		if crossed and edge - s - man._stride(man.speed) * 0.5 < 0.2 and mode == "run" and (not play or ask.get("ok", false)):
 			_takeoff(t, m, f)
 	if mode == "run" and s >= edge - 0.1:
-		_takeoff(t, m, 0 if fposmod(man.phase - toe[0], 1.0) < 0.5 else 1)
+		if play and not ask.get("ok", false):
+			_miss_edge(t, m)
+		else:
+			_takeoff(t, m, 0 if fposmod(man.phase - toe[0], 1.0) < 0.5 else 1)
 
 func _hips() -> Vector3:
 	return man.position + Basis(Vector3.UP, man.yaw) * man.skel.get_bone_pose_position(0)
@@ -1114,13 +1132,19 @@ func _street(dt: float, t: float) -> void:
 						e.done = true
 						continue
 				elif e.what == "hide":
+					if play and ask.is_empty() and st_s >= _spot(e.shield) - 6.0:
+						_ask(GESTURE.hide, 1.0)
 					if st_s >= _spot(e.shield) - 0.25:
-						_street_move(e, t)
+						_answer(e, t)
 				elif e.what != "hit":
 					var lead: float = LEADS.get(e.what, float(man.meta.kick.hit) + 0.05)
+					if play and ask.is_empty() and st_t >= float(e.t) - lead - 1.1:
+						_ask(GESTURE.get(e.what, "tap"), 1.1)
 					if st_t >= float(e.t) - lead:
-						_street_move(e, t)
+						_answer(e, t)
 				break
+			if play and mode == "street" and st_t > float(cars_on[-1].t) + 2.5 if not cars_on.is_empty() else false:
+				d.end_after(t, 1.0)
 		"dodge":
 			# the clip carries him aside, and the push gets him out of its way; then he runs on from there
 			var step := man.move(dt, Vector2(), 0.0, false)
@@ -1201,8 +1225,22 @@ func _street(dt: float, t: float) -> void:
 				for e in cars_on:
 					if e.what == "brake" and e.c.state == "driven":
 						vic = e
-				if not vic.is_empty() and tmr > 1.6:
+				if not vic.is_empty() and tmr > 1.6 and not play:
 					_stomp_begin(vic, t)
+				elif not vic.is_empty() and tmr > 1.6:
+					# his call: crush it (rage full, a swipe up) or not
+					if rage < 0.75:
+						d.end_after(t, 1.0)
+					elif not st.has("stomp_asked"):
+						st.stomp_asked = true
+						_ask("up", 2.5, true)
+						_say("RAGE FULL! SWIPE UP")
+					elif ask.get("ok", false):
+						ask = {}
+						_stomp_begin(vic, t)
+					elif ask.is_empty() or d.now() > float(ask.t1):
+						ask = {}
+						d.end_after(t, 0.5)
 				elif vic.is_empty() and tmr > 2.2:
 					d.end_after(t, 0.3)
 		"anger":
@@ -1257,6 +1295,8 @@ func _street(dt: float, t: float) -> void:
 				fx.burst("shock", at, Vector3.UP)
 				fx.burst("impact", at + Vector3(0, 0.3, 0), Vector3.UP)
 				shake = 0.7
+				score += 300
+				_say("CRUSHED!")
 				g.veh._smoke(c)
 				g.world.move_car_halos(c.i, g.veh.xform(c), true)
 				d.mark("stomp", t)
@@ -1465,13 +1505,16 @@ func _street_cars(dt: float, t: float) -> void:
 					kick_cam.car = c
 					kick_cam.k_tmr = tmr
 					d.mark("kick", t)
+					score += 200
 			"hit":
 				if left <= float(c.size.x) * 0.5 / v and mode == "street" and not e.has("skid"):
 					# it gets him (its nose, not its middle): thrown along its way and up
 					fx.burst("impact", _hips(), Vector3(heading.x, 0.5, heading.y))
 					shake = maxf(shake, 0.5)
 					kick_cam = {"at": Vector3(p.x, float(st.y), p.y) + Vector3(heading.x, 0.0, heading.y) * 3.0, "hit": true}
-					e.skid = [along, st_t]
+					var sgh := 1.0 if randf() < 0.5 else -1.0
+					c.state = "parked"
+					g.veh.shove(c, heading * v * 0.5 + nv * sgh * 7.0, 2.0 * sgh)
 					d.mark("hit", t)
 					man.yaw = atan2(heading.x, heading.y)
 					_thrown(Vector3(heading.x, 0.0, heading.y) * v * 0.7 + Vector3(0, 5.5, 0), 9.81, 1.0, float(st.y), _hips())
@@ -1488,6 +1531,9 @@ func _street_cars(dt: float, t: float) -> void:
 					fx.burst("impact", mid, Vector3(nv.x * away, 0.6, nv.y * away))
 					shake = maxf(shake, 0.5)
 					d.mark("crash2", t)
+					score += 150
+					if e.has("missed"):
+						_thrown(Vector3(nv.x, 0.0, nv.y) * away * -6.0 + Vector3(0, 5.0, 0), 9.81, 1.0, float(st.y), _hips())
 			"pole":
 				if left <= 0.0 and not e.has("bang"):
 					e.bang = true
@@ -1498,6 +1544,7 @@ func _street_cars(dt: float, t: float) -> void:
 					fx.burst("impact", Vector3(pp.x, float(st.y) + 0.9, pp.y), Vector3(-dir.x, 0.5, -dir.y))
 					shake = maxf(shake, 0.35)
 					d.mark("polehit", t)
+					score += 100
 			"hide":
 				if left <= 0.0 and e.has("shield") and not e.has("bang"):
 					# it rams the car he is behind, which goes skidding off, and goes over him
@@ -1512,6 +1559,9 @@ func _street_cars(dt: float, t: float) -> void:
 					fx.burst("impact", Vector3(p.x, float(st.y) + 0.8, p.y) - Vector3(dir.x, 0.0, dir.y) * float(c.size.x) * 0.5, Vector3(-dir.x, 0.6, -dir.y))
 					shake = maxf(shake, 0.5)
 					d.mark("smash", t)
+					score += 150
+					if st.get("hide_missed", false):
+						_thrown(Vector3(-dir.x, 0.0, -dir.y) * 5.0 + Vector3(0, 4.5, 0), 9.81, -1.0, float(st.y), _hips())
 			"step", "dive", "vault", "roofstep":
 				if left < -0.7 and not e.past:
 					# past him: it spins out
@@ -1526,6 +1576,10 @@ func _street_cars(dt: float, t: float) -> void:
 # ---------------------------------------------------------------- thrown: hit by a car, or off a wall
 ## Thrown: turning over (whole turns, so he comes down the right way up), down hard, rolls with it and gets up.
 func _thrown(vel: Vector3, gr: float, sgn: float, floor_y: float, hips: Vector3) -> void:
+	if play:
+		lives -= 1
+		ask = {}
+		_say("OUCH!  -1 ♥" if lives > 0 else "WIPED OUT")
 	man.jump("gap_jump", 0.86, 0.06)
 	man.jump_rate = 0.0
 	var T := (vel.y + sqrt(maxf(vel.y * vel.y + 2.0 * gr * maxf(hips.y - floor_y - 0.45, 0.0), 0.0))) / gr
@@ -1569,6 +1623,12 @@ func _thrown_step(dt: float, t: float) -> void:
 		man._to(Man.IDLE, 0.45)
 		man.speed = 0.0
 		man.idle_t = 0.0
+	if play and lives > 0 and not st.is_empty():
+		if tmr > 2.2:
+			_street_resync()
+			mode = "street"
+			tmr = 0.0
+		return
 	if tmr > 0.9 and not d.events.has("fail"):
 		d.mark("fail", t)
 	if tmr > 3.4:
@@ -1591,7 +1651,9 @@ func step(t: float) -> void:
 				want = 0.4 if tmr < 0.3 else 1.0
 			"stomp":
 				want = 0.4 if tmr < 0.35 else 1.0
-	elif m.slow:
+	if play and d.now() < perfect_until:
+		want = minf(want, 0.5)
+	elif m.slow and not chase:
 		match mode:
 			"air":
 				if fl.super:
@@ -1888,3 +1950,58 @@ func camera(mode_name: String, t: float) -> Array:
 		var tt: float = d.now()
 		pos += Vector3(sin(tt * 61.0), sin(tt * 53.0 + 1.3), sin(tt * 47.0 + 2.1)) * shake * 0.35
 	return [pos, look, fov]
+
+# ---------------------------------------------------------------- the Superhero Run: prompts and answers
+func _ask(gst: String, window: float, roof := false) -> void:
+	ask = {"g": gst, "ok": false, "t0": d.now(), "t1": d.now() + maxf(window, 0.3)}
+	# (testing: every edge, and three cars in four, answered)
+	if d.autoplay and (roof or randf() < 0.75):
+		gesture(gst, d.now() + maxf(window, 0.3) * 0.7)
+
+## A swipe or tap from the player: the right one, while asked, does it (late in the window: perfect).
+func gesture(gst: String, at: float) -> void:
+	if ask.is_empty() or ask.ok or gst != ask.g:
+		return
+	ask.ok = true
+	rage = minf(rage + 0.25, 1.0)
+	var k := (at - float(ask.t0)) / maxf(float(ask.t1) - float(ask.t0), 0.01)
+	if k > 0.6:
+		score += 200
+		perfect_until = at + 0.6
+		_say("PERFECT!")
+	else:
+		score += 100
+		_say("NICE")
+
+func _say(text: String) -> void:
+	flash = text
+	flash_until = d.now() + 1.0
+
+## The moment of a street move: done if he was told in time, gone wrong if not.
+func _answer(e: Dictionary, t: float) -> void:
+	if not play or ask.get("ok", false):
+		ask = {}
+		_street_move(e, t)
+		return
+	ask = {}
+	e.done = true
+	_say("TOO LATE!")
+	match e.what:
+		"crash2":
+			e.missed = true
+		"hide":
+			st.hide_missed = true
+			man.speed = 0.0
+			mode = "hide"
+			tmr = 0.0
+		_:
+			e.what = "hit"
+
+## Too late at the edge: he runs off it and falls.
+func _miss_edge(t: float, m: Dictionary) -> void:
+	ask = {}
+	lives = 1
+	var h := _hips()
+	var floor_y: float = minf(float(m.h_to), float(m.h_from)) if float(m.gap) < 1.5 else g.world.ground_at(h.x + m.u.x * 3.0, h.z + m.u.y * 3.0, 0.0)
+	_thrown(Vector3(m.u.x, 0.0, m.u.y) * 3.5 + Vector3(0, 1.5, 0), 9.81, 1.0, floor_y, h)
+	d.mark("wallhit", t)

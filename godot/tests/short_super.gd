@@ -793,8 +793,9 @@ func camera(mode_name: String, t: float) -> Array:
 			fov = 70.0
 		"sr_orbit":
 			# round him as he turns over, slowly, the city far below
-			var a0 := atan2(n.z, n.x)
-			var a := a0 + tmr * 2.2
+			# (off a building, round the open side of him only: the half facing the way he leapt)
+			var a0 := atan2(u.z, u.x)
+			var a := a0 + clampf(-1.3 + tmr * 2.2, -1.4, 1.4)
 			pos = hips + Vector3(cos(a), 0.0, sin(a)) * 5.5 + Vector3(0, 0.9, 0)
 			look = hips
 			fov = 62.0
@@ -820,6 +821,9 @@ func camera(mode_name: String, t: float) -> Array:
 			pos = e + n * 4.0 + u * 2.4 + Vector3(0, 0.8, 0)
 			look = hips.lerp(e + Vector3(0, 1.2, 0), 0.3)
 			fov = 64.0
+	# never inside a building: pulled in short of the first wall between him and the camera
+	if mode_name != "sr_chase" and mode_name != "sr_after":
+		pos = d.pulled(hips, pos)
 	# the shake of a hard landing
 	if shake > 0.0:
 		var tt: float = d.now()

@@ -230,6 +230,12 @@ func after_game(dt: float) -> void:
 		return
 	place_car(dt)
 	place_rex()
+	if recipe in ["gapjump", "roofrun", "superrun"]:
+		# a man of the director's own: the player (somewhere in the streets), his torch and the girl stay out of it
+		g.pl.flash = false
+		g.pl.beam.visible = false
+		g.pl.light.light_energy = 0.0
+		g.child.actor.visible = false
 	if recipe == "domino" or (recipe == "flip" and not car_free):
 		g.pl.actor.visible = false
 	if recipe == "gapjump":
@@ -2500,7 +2506,9 @@ func camera(t: float, dt: float) -> void:
 	pos = g.pl._out_of_rex(pos, (look - pos).normalized())
 	pos.y = maxf(pos.y, g.world.ground_at(pos.x, pos.z, 0.0) + 0.25)
 	# a cameraman, not a rig bolted to the car: it eases after its mark within a shot, and cuts clean between
-	if mode != last_mode or mode == "locked":
+	# (the superrun's set-ups follow him exactly: easing in game time, through slow motion, loses a man going
+	# up at 30 m/s)
+	if mode != last_mode or mode == "locked" or (mode.begins_with("sr_") and mode != "sr_chase" and mode != "sr_after"):
 		cam_p = pos
 		cam_l = look
 	else:

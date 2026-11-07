@@ -55,12 +55,18 @@ const CLIPS := {
 }
 
 # CMU clips: name: [subject (its .asf), motion (its .amc), kind, options]. Sampled at 60 fps for slow
-# motion. "entry_until": the run-up a cycle may join it in (s); "mirror": left and right swapped.
+# motion. "entry_until": the run-up a cycle may join it in (s); "mirror": left and right swapped; "span": the
+# part of the capture used (s); "hit": note when a foot reaches furthest forward (a kick landing).
 # - gap_jump: 127_25 "run jump over", a running leap off the left foot onto both feet, then a few steps on
 # - gap_jump_r: the same off the right foot
 const CMU_CLIPS := {
 	"gap_jump": ["127", "127_25", "once", {"from": "run", "to": "run", "entry_until": 0.4}],
 	"gap_jump_r": ["127", "127_25", "once", {"from": "run", "to": "run", "entry_until": 0.4, "mirror": true}],
+	# out of a car's way at a run: a side step each way, a dive and roll; and a front kick (from a stance)
+	"dodge_l": ["127", "127_13", "once", {"from": "run", "to": "run"}],
+	"dodge_r": ["127", "127_14", "once", {"from": "run", "to": "run"}],
+	"dive_roll": ["127", "127_23", "once", {"from": "run", "to": "run"}],
+	"kick": ["135", "135_04", "once", {"span": [2.4, 3.9], "hit": true}],
 }
 const CMU_FPS := 60.0
 # which of the actor's bones turns each of the man's, and the bone the man's is measured towards (none:
@@ -150,7 +156,7 @@ func _initialize() -> void:
 	for name in CMU_CLIPS:
 		var c: Array = CMU_CLIPS[name]
 		opts[name] = c[3]
-		clips[name] = read_cmu(name, c[0], c[1], c[2], clips.run.rot[0], c[3].get("mirror", false))
+		clips[name] = read_cmu(name, c[0], c[1], c[2], clips.run.rot[0], c[3].get("mirror", false), c[3].get("span", []), c[3].get("hit", false))
 		meta[name] = {"kind": c[2], "len": clips[name].length}
 		meta[name].merge(clips[name].extra)
 	for name in clips:
@@ -294,10 +300,12 @@ func read_clip(name: String, folder: String, file: String, kind: String, opt: Di
 ## through it is lifted (two-bone IK). The metadata gets when he takes off and lands.
 ## base: local rotations for the bones the capture doesn't drive (hands, face). mirror: the capture seen in
 ## a mirror (left and right swapped), for the same move off the other foot.
-func read_cmu(name: String, subject: String, motion: String, kind: String, base: Array, mirror := false) -> Clip:
+func read_cmu(name: String, subject: String, motion: String, kind: String, base: Array, mirror := false, span := [], hit := false) -> Clip:
 	var m := CMU.new()
 	m.load_asf(cmu.path_join(subject + ".asf"))
 	m.load_amc(cmu.path_join(motion + ".amc"))
+	if span.size() == 2:
+		m.frames = m.frames.slice(int(float(span[0]) * m.fps), int(float(span[1]) * m.fps) + 1)
 	# the mirror: x turned round; a rotation R seen in it is M R M, the left leg's is the right leg's
 	var M := Basis(Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)) if mirror else Basis.IDENTITY
 	var side := func(bone: String) -> String:
@@ -390,6 +398,17 @@ func read_cmu(name: String, subject: String, motion: String, kind: String, base:
 	var lifted := _cmu_keep_above_floor(c)
 	var held := _cmu_lock_feet(c)
 	c.extra = _cmu_flight(c)
+	if hit:
+		# the kick lands: a foot furthest ahead of the hips
+		var best := 0.0
+		for k in c.rot.size():
+			var g := pose(c, k)
+			for f in [lfoot, rfoot]:
+				var ahead: float = g[f + 1].origin.z - g[0].origin.z
+				if ahead > best:
+					best = ahead
+					c.extra.hit = k / c.fps
+					c.extra.hit_foot = "L" if f == lfoot else "R"
 	print("%s: CMU %s%s, scale %.3f, turned %.0f deg, floor %.3f m, %d feet lifted (most %.3f m), feet held (most %.3f m), %s" % [name, motion, " (mirrored)" if mirror else "", s, rad_to_deg(atan2(trav.x, trav.z)), floor_y, lifted[0], lifted[1], held, str(c.extra)])
 	return c
 
@@ -541,6 +560,8 @@ func _cmu_flight(c: Clip) -> Dictionary:
 			k = j
 		else:
 			k += 1
+	if b - a < 3 or a < 1:
+		return {}
 	var g0 := pose(c, a - 1)
 	var g1 := pose(c, b)
 	var push := lfoot if down_l[a - 1] else rfoot

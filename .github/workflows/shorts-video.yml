@@ -12,7 +12,7 @@ on:
         description: "Which Short: one recipe, all of them, or a random recipe for each video"
         type: choice
         default: random
-        options: [random, all, flip, hunter, ram, domino, nearmiss, freeze, gapjump, roofrun, superrun]
+        options: [random, all, flip, hunter, ram, domino, nearmiss, freeze, gapjump, roofrun, superrun, superchase]
       count:
         description: "How many videos (with 'all': how many of each recipe)"
         type: choice
@@ -22,6 +22,11 @@ on:
         description: "First seed, to remake a video you liked (leave empty for new random places)"
         required: false
         default: ""
+      outcome:
+        description: "superchase only: he makes it (pass), falls short of a roof (fail_fall), a car gets him (fail_car), or random"
+        type: choice
+        default: pass
+        options: [pass, fail_fall, fail_car, random]
 
 permissions:
   contents: read
@@ -44,7 +49,7 @@ jobs:
         run: |
           python3 - <<'EOF'
           import json, os, random
-          recipes = ["flip", "hunter", "ram", "domino", "nearmiss", "freeze", "gapjump", "roofrun", "superrun"]
+          recipes = ["flip", "hunter", "ram", "domino", "nearmiss", "freeze", "gapjump", "roofrun", "superrun", "superchase"]
           pick, n, s = os.environ["RECIPE"], int(os.environ["COUNT"]), os.environ.get("SEED", "").strip()
           base = int(s) if s.isdigit() else random.randint(1, 9000)
           jobs = []
@@ -74,6 +79,7 @@ jobs:
     env:
       RECIPE: ${{ matrix.recipe }}
       SEED: ${{ matrix.seed }}
+      OUTCOME: ${{ inputs.outcome }}
     steps:
       # the director and the sound mix live on the shorts-video branch: a run started from main uses that branch's
       # code, a run started from any other branch (to try changes to the director) uses that branch's own
@@ -129,7 +135,7 @@ jobs:
           start=$(date +%s)
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
             --audio-driver Dummy --resolution 1080x1920 --fixed-fps 120 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
-            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED --fps=120 2>&1 | tee godot.log
+            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED --fps=120 --outcome=${OUTCOME#fail_} 2>&1 | tee godot.log
           echo "recording took $(( $(date +%s) - start )) s"
           test -s out/clip.avi
           # what happened, as annotations on the run page: the clip, the second-by-second trace, and any errors

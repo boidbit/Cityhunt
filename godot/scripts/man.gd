@@ -209,7 +209,12 @@ func move(dt: float, dir: Vector2, want: float, crouch: bool, look := NAN) -> Ve
 				_to(IDLE, 0.3)
 		JUMP:
 			d = _root_step(dt, jump_rate)
-			if ct >= _len(clip) - FADE:
+			if ct >= _len(clip) - FADE and not meta[clip].has("to_speed"):
+				# (a clip that ends standing: a kick)
+				speed = 0.0
+				idle_t = 0.0
+				_to(IDLE, FADE)
+			elif ct >= _len(clip) - FADE:
 				var m: Dictionary = meta[clip]
 				speed = m.to_speed
 				phase = fposmod(m.to_phase - FADE * speed / _stride(speed), 1.0)
@@ -230,8 +235,10 @@ func animate(dt: float) -> void:
 ## at: join the clip there instead (its take-off: straight into the air from a sprint), over fade seconds.
 ## Returns the clip time it joined at.
 func jump(c := "gap_jump", at := -1.0, fade := FADE) -> float:
-	var entry: PackedFloat32Array = meta[c].entry
-	var t := entry[int(phase * entry.size()) % entry.size()] if at < 0.0 else at
+	var t := at
+	if at < 0.0:
+		var entry: PackedFloat32Array = meta[c].entry
+		t = entry[int(phase * entry.size()) % entry.size()]
 	_play(JUMP, c, 0.0, fade)
 	ct = t
 	jump_rate = 1.0

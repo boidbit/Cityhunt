@@ -22,7 +22,7 @@ FONT = os.path.join(ROOT, "getaway", "assets", "fonts", "BigShouldersDisplay.ttf
 
 HOOK = {"flip": "WAIT FOR IT", "ram": "CAR VS T-REX", "nearmiss": "TOO CLOSE", "freeze": "DO NOT MOVE", "domino": "",
         "hunter": "HUNT IT DOWN", "gapjump": "DON'T LOOK DOWN", "roofrun": "HOW FAR CAN HE GO?",
-        "superrun": "NOTHING CAN STOP HIM"}
+        "superrun": "NOTHING CAN STOP HIM", "superchase": "EVERY CAR IS AFTER HIM"}
 
 # What to paste into YouTube for each Short: a title picked by the seed (so two videos of one recipe differ),
 # a description and tags. Titles stay under 100 characters; no film or car brand names.
@@ -45,6 +45,11 @@ TITLES = {
                 "Flat Out Over the Rooftops 😱", "One Run, Every Roof 🏃🏙️"],
     "superrun": ["He Jumped 20 Floors Up 😳", "Superhero Run Across the City 🦸", "Nothing Can Stop Him 💥",
                  "The Landing at the End 😱", "Day 1 With Superpowers 🦸💥"],
+    "superchase": ["Every Car in the City Is After Him 😳", "He Kicked a Car Away 💥", "Superhero vs Traffic 🦸🚗",
+                   "Run. Dodge. Kick. 💥", "The Last Car Never Saw It Coming 😱"],
+    # (superchase when it goes wrong: he comes up short of a roof, or a car gets him)
+    "superchase_fail": ["He Almost Made It… 😬", "Superpowers Aren't Everything 😳", "Not Every Jump Works Out… 😱",
+                        "One Mistake Was Enough 😬", "Day 1 With Superpowers Went Wrong 😳"],
 }
 STORY = {
     "flip": "A T-Rex chases a car through an empty city, bites it twice and throws it over. Watch it in slow motion.",
@@ -59,6 +64,10 @@ STORY = {
                "stopping. (3D animation: motion-captured movement in a game engine city.)",
     "superrun": "Across the city over its roofs: up twenty metres in one leap, off the top again, flips, superhero "
                 "landings, and a drop all the way to the street. (3D animation made in a game engine.)",
+    "superchase": "Over the roofs and down to the street, where every car in the city comes after him. He dodges "
+                  "them, leaps one, and kicks the last one away. (3D animation made in a game engine.)",
+    "superchase_fail": "Over the roofs and down to the street with every car after him, but this time it doesn't "
+                       "go to plan. (3D animation made in a game engine: nobody gets hurt.)",
 }
 QUESTION = {
     "flip": "Would you have made it out? 👇", "ram": "Who won this one? 👇", "domino": "How many did you count? 👇",
@@ -66,6 +75,8 @@ QUESTION = {
     "gapjump": "Would you make this jump? 👇",
     "roofrun": "Which leap was the hardest? 👇",
     "superrun": "Which power should he get next? 👇",
+    "superchase": "Which dodge was the best? 👇",
+    "superchase_fail": "Would you have made it? 👇",
 }
 # (a rooftop leap has nothing to do with dinosaurs: its own tags)
 PARKOUR_TAGS = ["parkour", "rooftop", "rooftop jump", "free running", "stunt", "slow motion", "3d animation", "cgi",
@@ -79,19 +90,25 @@ RECIPE_TAGS = {
     "gapjump": ["gap jump", "roof jump", "high jump"],
     "roofrun": ["rooftop run", "roof run", "sprint", "parkour run"],
     "superrun": ["superhero", "superpowers", "super jump", "superhero landing", "flip"],
+    "superchase": ["superhero", "superpowers", "car chase", "dodge", "super jump", "car kick"],
 }
 HASHTAGS = {"flip": "#trex #dinosaur #slowmotion", "ram": "#trex #dinosaur #carcrash", "domino": "#trex #satisfying #dinosaur",
             "nearmiss": "#trex #dinosaur #closecall", "freeze": "#trex #dinosaur #suspense",
             "hunter": "#trex #dinosaur #carcrash", "gapjump": "#parkour #rooftop #slowmotion",
-            "roofrun": "#parkour #rooftop #freerunning", "superrun": "#superhero #superpowers #slowmotion"}
+            "roofrun": "#parkour #rooftop #freerunning", "superrun": "#superhero #superpowers #slowmotion",
+            "superchase": "#superhero #carchase #stunt"}
 
 
-def metadata(recipe, seed):
+ROOF_RECIPES = ("gapjump", "roofrun", "superrun", "superchase")
+
+
+def metadata(recipe, seed, fail=False):
     """Title, description and tags for one video, as text ready to copy into YouTube Studio."""
-    titles = TITLES.get(recipe, ["T-Rex in the City 🦖"])
+    key = recipe + "_fail" if fail and recipe + "_fail" in TITLES else recipe
+    titles = TITLES.get(key, ["T-Rex in the City 🦖"])
     title = titles[seed % len(titles)] + " #shorts"
-    desc = "%s\n\n%s\n\n#shorts %s" % (STORY.get(recipe, ""), QUESTION.get(recipe, ""), HASHTAGS.get(recipe, "#trex"))
-    tags = ", ".join(RECIPE_TAGS.get(recipe, []) + (PARKOUR_TAGS if recipe in ("gapjump", "roofrun", "superrun") else TAGS))
+    desc = "%s\n\n%s\n\n#shorts %s" % (STORY.get(key, ""), QUESTION.get(key, ""), HASHTAGS.get(recipe, "#trex"))
+    tags = ", ".join(RECIPE_TAGS.get(recipe, []) + (PARKOUR_TAGS if recipe in ROOF_RECIPES else TAGS))
     return "TITLE\n%s\n\nDESCRIPTION\n%s\n\nTAGS\n%s\n" % (title, desc, tags)
 
 
@@ -108,6 +125,28 @@ def effects(name, n):
         return [("clang_3", 1.0, 0, 0.9), ("growl_2", 1.0, 0.05, 0.9), ("shatter_2", 0.7, 0.1, 1), ("SUB", 0.7, 0, 1)]
     if name == "fall":
         return [("roar_2", 0.9, 0, 0.75), ("boom_1", 1.0, 0.6, 0.8), ("SUB", 1.0, 0.6, 1), ("thud_1", 1.0, 0.65, 0.7)]
+    # superchase: the cars, and what he does about them
+    if name == "engines":
+        return [("ignite", 0.9, 0, 1), ("ignite", 0.7, 0.25, 0.85)]
+    if name.startswith("pass"):
+        return [("whoosh", 1.0, -0.15, 0.7)]
+    if name.startswith("spin"):
+        return [("whoosh", 0.55, 0, 1.5), ("thud_1", 0.5, 0.5, 0.8)]
+    if name.startswith("dodge"):
+        return [("whoosh", 0.5, 0, 1.2), ("step_dry_2", 0.8, 0.1, 1)]
+    if name.startswith("dive"):
+        return [("whoosh", 0.7, 0, 1.0), ("thud_2", 0.7, 0.45, 1.0), ("step_dry_4", 0.6, 0.9, 1)]
+    if name.startswith("vault"):
+        return [("step_dry_2", 1.0, 0, 0.9), ("whoosh", 0.7, 0.05, 0.8)]
+    if name == "plant":
+        return [("step_dry_3", 1.0, 0, 0.8)]
+    if name == "kick":
+        return [("boom_2", 1.0, 0, 0.8), ("clang_2", 1.0, 0.01, 1), ("shatter_1", 0.9, 0.03, 1), ("SUB", 1.0, 0, 1),
+                ("clang_3", 0.9, 1.0, 0.8), ("thud_3", 1.0, 1.0, 0.7), ("shatter_2", 0.6, 1.05, 0.9)]
+    if name == "hit":
+        return [("thud_1", 1.0, 0, 1), ("clang_1", 1.0, 0, 0.9), ("shatter_2", 0.8, 0.02, 1), ("SUB", 1.0, 0, 1)]
+    if name == "wallhit":
+        return [("thud_2", 1.0, 0, 0.8), ("SUB", 0.8, 0, 1), ("step_dry_1", 0.7, 0.02, 0.7)]
     if name == "caught":
         return [("roar_3", 1.0, 0, 1), ("boom_2", 0.9, 0.25, 0.8), ("SUB", 1.0, 0.25, 1), ("growl_2", 0.8, 0.4, 0.9)]
     if name == "flip":
@@ -125,6 +164,8 @@ def effects(name, n):
         return [("roar_1" if name == "roar" else ("roar_2" if name == "roar_2" else "roar_3"), 1.0, 0, 1)]
     if name == "sniff":
         return [("growl_3", 0.45, 0.3, 0.8)]
+    if name == "fail":
+        return [("stinger", 0.8, 0.35, 1), ("SUB", 0.6, 0.3, 1)]
     if name.startswith("slow_on"):
         return [("whoosh", 0.7, 0, 0.5)]
     # a superhero: blasting off, turning over in the air, coming down hard enough to crack the roof
@@ -171,10 +212,6 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
 
-    meta = a.out[:-4] + ".txt"
-    with open(meta, "w", encoding="utf-8") as fh:
-        fh.write(metadata(a.recipe, a.seed))
-
     events = []
     pre = 0.0   # recorded before the shot started (the game's start screen): cut off
     with open(a.log, errors="replace") as fh:
@@ -186,6 +223,12 @@ def main():
             if m:
                 pre = float(m.group(1))
     ev = dict(events)
+    meta = a.out[:-4] + ".txt"
+    with open(meta, "w", encoding="utf-8") as fh:
+        fh.write(metadata(a.recipe, a.seed, "caught" in ev))
+    if a.recipe == "superchase":
+        # (no creature in it: the cut to black is quiet)
+        events = [(n, t) for n, t in events if n != "caught"] + ([("fail", ev["caught"])] if "caught" in ev else [])
     dur = float(probe(a.clip, "format=duration")) - pre
     has_audio = bool(probe(a.clip, "stream=index", "a"))
     # nobody dies on screen: if the creature gets him, cut to black a moment after and hold it under the sound
@@ -219,7 +262,7 @@ def main():
     # (atrim by name: its second positional option is another start, not the end)
     filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,apad,volume=1.0[ga]" % (game_in, vend))
     # (up on a roof the wind is the loudest thing there is)
-    wind = 0.45 if a.recipe in ("gapjump", "roofrun", "superrun") else 0.2
+    wind = 0.45 if a.recipe in ROOF_RECIPES else 0.2
     filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,volume=%.2f[amb]" % (wind_in, total, wind))
     idx = wind_in + 1
     count = {}
@@ -227,7 +270,7 @@ def main():
         kind = re.sub(r"_\d+$", "", name)
         count[kind] = count.get(kind, 0) + 1
         for s, gain, delay, pitch in effects(name, count[kind]):
-            start = t + delay
+            start = max(t + delay, 0.0)
             if start >= total:
                 continue
             if slowed(t) and s != "whoosh":
@@ -252,6 +295,15 @@ def main():
                                 % (idx, max(total - start, 0.1), 0.35 - k * 0.12, int(start * 1000), idx))
                     mix.append("[s%d]" % idx)
                     idx += 1
+    # superchase: every engine in the street, from when they start to the end
+    if a.recipe == "superchase" and "engines" in ev and ev["engines"] < vend:
+        start = ev["engines"]
+        inputs += ["-stream_loop", "-1", "-i", snd("engine_loop")]
+        filt.append("[%d:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=end=%.2f,asetpts=PTS-STARTPTS,"
+                    "volume=0.8,afade=t=in:d=0.6,afade=t=out:st=%.2f:d=0.5,adelay=%d:all=1[s%d]"
+                    % (idx, vend - start, max(vend - start - 0.5, 0), int(start * 1000), idx))
+        mix.append("[s%d]" % idx)
+        idx += 1
     # the heartbeat, from when it comes near to when it has gone
     on = ev.get("heart_on", vend)
     off = ev.get("heart_off", vend)
@@ -274,6 +326,8 @@ def main():
 
     if HOOK.get(a.recipe):
         cap(HOOK[a.recipe], 0.1, 1.5)
+    if a.recipe == "superchase" and "caught" in ev:
+        cap("FAIL", vend + 0.15, total, 220, "(h-text_h)/2")
     if a.recipe == "domino":
         n = 0
         for name, t in events:

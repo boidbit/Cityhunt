@@ -13,6 +13,10 @@
 ##                  of the block, leaps the alley and sprints back along the roofs on the other side
 ## --mode=superrun  a superhero over the city's roofs: blasts up onto roofs 20 m higher, dives off them, flips,
 ##                  cracks the roof with superhero landings, and drops off the last one to the street
+## --mode=superchase  the superrun's roofs (no flips, the camera behind him), then down in the street every car
+##                  comes for him: he dodges them, leaps one, and kicks the last one away end over end
+## --outcome=X      superchase only: pass (he makes it), fall (short of a roof, he falls), car (a car gets him),
+##                  random (by the seed)
 ## --seed=N         where in the city it happens (and the small random choices)
 ## --fps=N          frames recorded a second (the same as Godot's --fixed-fps); compose.py blends them into motion blur
 ## Do not call a flag --shot, --frames, --day, --play, --loc or --stats: the game itself reads those (--shot=x quits it after 60 frames).
@@ -130,6 +134,7 @@ var rr_toe := [0.0, 0.0]      # the stride phase at which each foot (left, right
 var rr_steps := 0
 var rr_t := 0.0               # game seconds since he set off
 var sr = null                 # superrun (tests/short_super.gd)
+var outcome := "pass"         # superchase: pass, fall, car, random
 
 ## Runs after the game's own _process (higher priority number = later): puts the car and the creature where the
 ## shot wants them and takes the camera over.
@@ -151,6 +156,8 @@ func _initialize() -> void:
 			seed_n = int(a.substr(7))
 		elif a.begins_with("--fps="):
 			fps = float(a.substr(6))
+		elif a.begins_with("--outcome="):
+			outcome = a.substr(10)
 	root.add_child(load("res://scenes/main.tscn").instantiate())
 	rig = Rig.new(self)
 	root.add_child(rig)
@@ -196,7 +203,7 @@ func _process(dt: float) -> bool:
 			step_gapjump(t)
 		"roofrun":
 			step_roofrun(t)
-		"superrun":
+		"superrun", "superchase":
 			sr.step(t)
 		_:
 			step_flip(t, dt)
@@ -215,7 +222,7 @@ func _process(dt: float) -> bool:
 	if t >= trace_at:
 		trace_at += 0.5
 		log_trace(t)
-	if (done_at >= 0.0 and t >= done_at) or t >= (75.0 if recipe == "superrun" else MAX_LEN):
+	if (done_at >= 0.0 and t >= done_at) or t >= (75.0 if recipe in ["superrun", "superchase"] else MAX_LEN):
 		Engine.time_scale = 1.0
 		mark("end", t)
 		print("shot %s done: phase %s, creature %s" % [recipe, g.phase, g.mon.state])
@@ -230,7 +237,7 @@ func after_game(dt: float) -> void:
 		return
 	place_car(dt)
 	place_rex()
-	if recipe in ["gapjump", "roofrun", "superrun"]:
+	if recipe in ["gapjump", "roofrun", "superrun", "superchase"]:
 		# a man of the director's own: the player (somewhere in the streets), his torch and the girl stay out of it
 		g.pl.flash = false
 		g.pl.beam.visible = false
@@ -246,7 +253,7 @@ func after_game(dt: float) -> void:
 		g.pl.actor.visible = false
 		g.mon.actor.visible = false
 		drive_runner(dt)
-	if recipe == "superrun":
+	if recipe in ["superrun", "superchase"]:
 		g.pl.actor.visible = false
 		g.mon.actor.visible = false
 		sr.drive(dt)
@@ -351,13 +358,19 @@ func setup() -> void:
 			setup_gapjump()
 		"roofrun":
 			setup_roofrun()
-		"superrun":
+		"superrun", "superchase":
 			g.mon.awareness = 0.0
 			walk = true
 			rpath = [Vector2(-g.bound + 4.0, -g.bound + 4.0), Vector2(-g.bound + 6.0, -g.bound + 4.0)]
 			rs = 0.0
 			rspeed = 0.0
 			sr = SR.new(self)
+			if recipe == "superchase":
+				sr.chase = true
+				if outcome == "random":
+					outcome = ["pass", "pass", "fall", "car"][seed_n % 4]
+				sr.outcome = outcome
+				print("superchase: outcome %s" % outcome)
 			if not sr.setup():
 				push_error("superrun: no route")
 				quit(1)
@@ -2158,7 +2171,7 @@ func _rr_clear(L: Dictionary, c: String, hips0: Vector3, u: Vector3, vh: float, 
 func cut(t: float) -> String:
 	var slowing := slow_until >= 0.0
 	match recipe:
-		"superrun":
+		"superrun", "superchase":
 			return sr.cut(t)
 		"roofrun":
 			# behind him as he runs; side on at each edge as he leaps it, from above the alley for the alley;
@@ -2436,7 +2449,7 @@ func camera(t: float, dt: float) -> void:
 				pos = on_b + d3 * 5.0 + n3 * 1.1 + Vector3(0, 0.9, 0)
 				look = on_b + Vector3(0, 1.0, 0) - d3 * 1.5
 				fov = 62.0
-		"sr_chase", "sr_after", "sr_launch", "sr_orbit", "sr_land", "sr_dive", "sr_ground", "sr_hop":
+		"sr_chase", "sr_after", "sr_launch", "sr_orbit", "sr_land", "sr_dive", "sr_ground", "sr_hop", "sc_air", "sc_fall", "sc_front", "sc_back", "sc_kick":
 			var cam: Array = sr.camera(mode, t)
 			pos = cam[0]
 			look = cam[1]
@@ -2502,7 +2515,7 @@ func camera(t: float, dt: float) -> void:
 	# a cameraman, not a rig bolted to the car: it eases after its mark within a shot, and cuts clean between
 	# (the superrun's set-ups follow him exactly: easing in game time, through slow motion, loses a man going
 	# up at 30 m/s)
-	if mode != last_mode or mode == "locked" or (mode.begins_with("sr_") and mode != "sr_chase" and mode != "sr_after"):
+	if mode != last_mode or mode == "locked" or (mode.begins_with("sr_") and mode != "sr_chase" and mode != "sr_after") or mode in ["sc_air", "sc_fall", "sc_kick"]:
 		cam_p = pos
 		cam_l = look
 	else:

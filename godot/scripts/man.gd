@@ -26,6 +26,7 @@ var rtrack := {}                # clip -> PackedInt32Array, rotation track per a
 var htrack := {}                # clip -> the hips' position track
 var bones := PackedInt32Array() # bones any clip animates
 var rest_q: Array[Quaternion] = []
+var rest_s: Array[Vector3] = []   # the bones' scale at rest (each pose starts from it)
 var cyc_speed := PackedFloat32Array()
 var cyc_stride := PackedFloat32Array()
 var body: Node3D                # leans into turns and speed changes
@@ -72,6 +73,7 @@ func _ready() -> void:
 	bones = PackedInt32Array(ids)
 	for b in skel.get_bone_count():
 		rest_q.append(skel.get_bone_rest(b).basis.get_rotation_quaternion())
+		rest_s.append(skel.get_bone_rest(b).basis.get_scale())
 	for c in anims:
 		var an: Animation = anims[c]
 		var tr := PackedInt32Array()
@@ -570,6 +572,9 @@ func _apply(layers: Array) -> void:
 				q = -q
 			acc += q * (l[2] / tot)
 		skel.set_bone_pose_rotation(b, acc.normalized())
+		# the scale too: bending a bone in place (IK) can leave a little scale in its pose, which would otherwise
+		# build up frame after frame into a stretched limb
+		skel.set_bone_pose_scale(b, rest_s[b])
 	var h := Vector3()
 	for l in layers:
 		h += (anims[l[0]] as Animation).position_track_interpolate(htrack[l[0]], l[1]) * (l[2] / tot)

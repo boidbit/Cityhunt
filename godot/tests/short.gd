@@ -17,6 +17,7 @@
 ##                  comes for him: he dodges them, leaps one, and kicks the last one away end over end
 ## --outcome=X      superchase only: pass (he makes it), fall (short of a roof, he falls), car (a car gets him),
 ##                  random (by the seed); a fail is a crash he gets up from, nobody is hurt
+## --stunts=all   superchase: every street stunt in the one video (otherwise a few, picked by the seed)
 ## --length=N       seconds of video at most (0: as long as the recipe takes); superchase sizes itself to it
 ## --seed=N         where in the city it happens (and the small random choices)
 ## --fps=N          frames recorded a second (the same as Godot's --fixed-fps); compose.py blends them into motion blur
@@ -136,6 +137,7 @@ var rr_steps := 0
 var rr_t := 0.0               # game seconds since he set off
 var sr = null                 # superrun (tests/short_super.gd)
 var outcome := "pass"         # superchase: pass, fall, car, random
+var all_stunts := false       # --stunts=all: superchase puts every street stunt in the one video
 var want_len := 0.0           # --length: seconds of video at most (0: the recipe's own)
 
 ## Runs after the game's own _process (higher priority number = later): puts the car and the creature where the
@@ -160,6 +162,8 @@ func _initialize() -> void:
 			fps = float(a.substr(6))
 		elif a.begins_with("--outcome="):
 			outcome = a.substr(10)
+		elif a == "--stunts=all":
+			all_stunts = true
 		elif a.begins_with("--length="):
 			want_len = float(a.substr(9))
 	root.add_child(load("res://scenes/main.tscn").instantiate())
@@ -375,6 +379,7 @@ func setup() -> void:
 					outcome = ["pass", "pass", "fall", "car"][seed_n % 4]
 				sr.outcome = outcome
 				sr.want_len = want_len
+				sr.all_stunts = all_stunts
 				print("superchase: outcome %s" % outcome)
 			if not sr.setup():
 				push_error("superrun: no route")

@@ -32,6 +32,11 @@ on:
         type: choice
         default: auto
         options: [auto, "15", "20", "30", "45", "60"]
+      stunts:
+        description: "superchase only: a few street stunts picked by the seed, or all of them in the one video (use length auto or 60)"
+        type: choice
+        default: some
+        options: [some, all]
 
 permissions:
   contents: read
@@ -86,6 +91,7 @@ jobs:
       SEED: ${{ matrix.seed }}
       OUTCOME: ${{ inputs.outcome }}
       LENGTH: ${{ inputs.length }}
+      STUNTS: ${{ inputs.stunts }}
     steps:
       # the code of the branch the run was started from (main, or a branch with changes to try)
       - uses: actions/checkout@v4
@@ -140,7 +146,7 @@ jobs:
           start=$(date +%s)
           xvfb-run -a -s "-screen 0 1080x1920x24" ~/godot/godot --path godot --rendering-driver vulkan \
             --audio-driver Dummy --resolution 1080x1920 --fixed-fps 120 --write-movie "$GITHUB_WORKSPACE/out/clip.avi" \
-            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED --fps=120 --outcome=${OUTCOME#fail_} --length=${LENGTH/auto/0} 2>&1 | tee godot.log
+            -s res://tests/short.gd -- --mode=$RECIPE --seed=$SEED --fps=120 --outcome=${OUTCOME#fail_} --length=${LENGTH/auto/0} --stunts=$STUNTS 2>&1 | tee godot.log
           echo "recording took $(( $(date +%s) - start )) s"
           test -s out/clip.avi
           # what happened, as annotations on the run page: the clip, the second-by-second trace, and any errors

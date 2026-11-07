@@ -60,6 +60,7 @@ var st_off := 0.0            # how far to the side of its line
 var cars_on: Array = []      # the cars after him (see _street_begin)
 var kick_cam := {}
 var want_len := 0.0          # seconds of video wanted (0: as long as it takes): how many roofs, how many cars
+var all_stunts := false     # every street stunt in the one video (in the seed's order), not just a few
 var relax := false           # no route with all the street it wants: take one with less
 
 func _init(p_d) -> void:
@@ -875,7 +876,7 @@ func _street_begin(t: float) -> void:
 		var along := q.dot(dir)
 		if along > -float(st.behind) - 8.0 and along < float(st.ahead) + 8.0 and absf(q.dot(u)) < 4.5:
 			_park_away(c)
-		elif c.state == "parked" and picked.size() < 12:
+		elif c.state == "parked" and picked.size() < 16:
 			picked.append(c)
 	# the cars, in the order they get to him: [when, +1 from behind / -1 head on, what for (, the lamp post)]
 	var plan := []
@@ -886,7 +887,11 @@ func _street_begin(t: float) -> void:
 			if pole != Vector2.INF:
 				plan.append([b[0], 1, "pole", pole])
 				continue
+			# (no lamp post where it would be: two cars head on instead, or a side step if that is coming anyway)
 			what = "crash2"
+			for b2 in _beats():
+				if b2[2] == "crash2":
+					what = "step"
 		if what == "crash2":
 			plan.append([b[0], 1, "crash2"])
 			plan.append([b[0], -1, "crash2_h"])
@@ -975,6 +980,8 @@ func _beats() -> Array:
 		pool[i] = pool[j]
 		pool[j] = tmp
 	var k := 1 if (want_len > 0.0 and want_len <= 20.0) else (5 if want_len > 32.0 else 3)
+	if all_stunts:
+		k = pool.size()
 	var out := []
 	var at := 4.6 if pool[0] == "hide" else 2.8
 	for i in k:

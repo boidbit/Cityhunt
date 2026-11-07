@@ -337,7 +337,7 @@ func _score(path: Array, fin: Dictionary) -> float:
 func _max_moves() -> int:
 	if want_len <= 0.0:
 		return 2
-	return 1 if want_len <= 20.0 else (2 if want_len <= 32.0 else (3 if want_len <= 50.0 else 4))
+	return 1 if want_len <= 20.0 else (2 if want_len <= 50.0 else 3)
 
 # ---------------------------------------------------------------- him
 ## When each foot leaves the ground in his sprint (a fraction of the stride: left, right).
@@ -428,7 +428,7 @@ func drive(dt: float) -> void:
 				st_t += dt
 				_street_cars(dt, t)
 			_thrown_step(dt, t)
-		"street", "dodge", "vault", "vault_land", "kick", "after":
+		"street", "dodge", "vault", "vault_land", "kick", "after", "hide", "anger", "crouch2", "stomp_air", "stomp", "top":
 			_street(dt, t)
 		"end":
 			man.move(dt, Vector2(), 0.0, false)
@@ -626,6 +626,8 @@ func _air(dt: float, t: float, m: Dictionary) -> void:
 		tmr = 0.0
 		impact(at, 1.6 if m.has("street") else 1.25, float(m.h_to))
 		d.mark("slam_%d" % (mi + 1), t)
+		if chase and m.has("street"):
+			_shockwave(at, m.u, t)
 	else:
 		man.jump_rate = 1.5
 		fl.deep = clampf(0.03 * fall + 0.05, 0.08, 0.26)
@@ -837,12 +839,14 @@ func _open_run(p: Vector2, dir: Vector2, most: float) -> float:
 		k += 2.0
 	return k
 
-## Down in the street, the cars come for him, nobody at the wheel: from behind one after another, then head on.
-## He sidesteps the first, dives and rolls out of the way of the second, leaps over the third as it comes at him;
-## the fourth, with a fifth closing from behind and nowhere left to go, he kicks out of his way and it flies off end
-## over end. The ones he got away from spin out behind him. (Outcome "car": the second one gets him.)
-## Each car is timed to the moment it reaches him and aimed at where he will be then. (Outcome "fall": he comes
-## up short of the second roof, hits its wall and falls; it goes dark before he lands.)
+## Down in the street every car in sight comes for him, nobody at the wheel, each one driving straight at him: from
+## where they wait (behind him, and up ahead) they pull off as late as they can and are flat out when they get to him.
+## What he does about them (the seed picks which, and in what order): a side step or a dive and roll at the last
+## moment (it goes through where he was); a leap over one coming head on; a foot on the roof of one and off it; two at
+## once from both ends that hit each other when he steps out from between them; one that follows him past a lamp
+## post into it; one that rams the car he ducks behind and goes over him. Then one head on he kicks away end over end,
+## the one behind him stops short, and he has had enough: he leaps onto it, crushes it flat and stands on the wreck.
+## (Outcome "car": the second one gets him: he is thrown, comes down hard, rolls and gets up.)
 func _street_begin(t: float) -> void:
 	var m: Dictionary = route[-1]
 	var p0 := Vector2(man.position.x, man.position.z)
@@ -871,33 +875,45 @@ func _street_begin(t: float) -> void:
 		var along := q.dot(dir)
 		if along > -float(st.behind) - 8.0 and along < float(st.ahead) + 8.0 and absf(q.dot(u)) < 4.5:
 			_park_away(c)
-		elif c.state == "parked" and picked.size() < 8:
+		elif c.state == "parked" and picked.size() < 12:
 			picked.append(c)
-	# they wait in the street, engines running, in the order they will go: behind him, and up ahead
-	var beats := _beats()
+	# the cars, in the order they get to him: [when, +1 from behind / -1 head on, what for (, the lamp post)]
+	var plan := []
+	for b in _beats():
+		var what: String = b[2]
+		if what == "pole":
+			var pole := _find_pole(SPRINT * 0.82 * (float(b[0]) - 0.3))
+			if pole != Vector2.INF:
+				plan.append([b[0], 1, "pole", pole])
+				continue
+			what = "crash2"
+		if what == "crash2":
+			plan.append([b[0], 1, "crash2"])
+			plan.append([b[0], -1, "crash2_h"])
+		elif what == "hide":
+			plan.append([float(b[0]) - 2.2, -1, "shield"])
+			plan.append([b[0], -1, "hide"])
+		else:
+			plan.append([b[0], b[1], what])
 	var nb := 0
-	var nh := 0
-	for b in beats:
+	for b in plan:
 		if int(b[1]) > 0:
 			nb += 1
-		else:
-			nh += 1
 	var gap_b := clampf((float(st.behind) - 9.0) / maxf(nb - 1, 1), 5.5, 7.0)
-	var far := minf(float(st.ahead) - 4.0, _need_ahead() + 18.0)
 	var kb := 0
-	var kh := 0
 	cars_on = []
-	for i in mini(beats.size(), picked.size()):
+	for i in mini(plan.size(), picked.size()):
 		var c: Dictionary = picked[i]
-		var b: Array = beats[i]
+		var b: Array = plan[i]
 		var from := int(b[1])
 		var start: float
 		if from > 0:
+			# queued behind where he lands, the first to go at the front
 			start = -6.0 - gap_b * kb
 			kb += 1
 		else:
-			start = far - 7.0 * (nh - 1 - kh)
-			kh += 1
+			# up ahead, a fair way past where it will get to him
+			start = clampf(SPRINT * 0.82 * float(b[0]) + 28.0, 12.0, float(st.ahead) - 4.0)
 		var lane0 := 1.7 if i % 2 == 0 else -1.7
 		if c.box >= 0:
 			g.col.disable_box(c.box)
@@ -911,27 +927,62 @@ func _street_begin(t: float) -> void:
 		(c.node as Node3D).visible = true
 		g.veh._apply(c)
 		g.world.move_car_halos(c.i, g.veh.xform(c), true)
-		cars_on.append({"c": c, "t": float(b[0]), "from": from, "what": b[2], "v": 13.5 if from > 0 else 12.0,
-			"s_meet": start, "start": start, "lane0": lane0, "lane": lane0, "lane_off": _dodge_off(b[2], i + 1),
-			"fixed": false, "done": false, "past": false, "i": i + 1})
+		var e := {"c": c, "t": float(b[0]), "from": from, "what": b[2], "v": 13.5 if from > 0 else 12.0,
+			"s_meet": start, "start": start, "lane0": lane0, "lane": lane0, "fixed": false, "done": false, "past": false, "i": i + 1}
+		if b[2] == "pole":
+			var pl: Vector2 = b[3]
+			e.pole = pl
+			e.s_meet = pl.x - float(c.size.x) * 0.5
+			e.lane = pl.y
+			e.fixed = true
+		if b[2] in ["crash2_h", "shield", "brake"]:
+			e.done = true
+		cars_on.append(e)
+	for k in range(1, cars_on.size()):
+		if cars_on[k].what == "crash2_h" and cars_on[k - 1].what == "crash2":
+			cars_on[k - 1].pair = cars_on[k]
+		if cars_on[k].what == "hide" and cars_on[k - 1].what == "shield":
+			cars_on[k].shield = cars_on[k - 1]
+	for e in cars_on:
+		if e.what == "hide" and not e.has("shield"):
+			e.what = "vault"
 	mode = "street"
 	tmr = 0.0
 	st_t = 0.0
 	st_s = 0.0
 	st_off = 0.0
 	d.mark("engines", t)
-	print("superchase: the street runs %.0f m on (%.0f m behind), %d cars after him" % [float(st.ahead), float(st.behind), cars_on.size()])
+	var whats := []
+	for e in cars_on:
+		whats.append(e.what)
+	print("superchase: the street runs %.0f m on (%.0f m behind), %d cars after him: %s" % [float(st.ahead), float(st.behind), cars_on.size(), ", ".join(whats)])
 
-## [seconds into the street when it reaches him, +1 from behind / -1 head on, what he does], by the length wanted.
+const LEADS := {"step": 0.72, "dive": 0.78, "vault": 0.36, "roofstep": 0.42, "crash2": 0.72}
+
+## [seconds into the street when it gets to him, +1 from behind / -1 head on, what he does]: a few of the moves, in
+## an order picked by the seed (as many as the length wanted allows), then the kick and the one he crushes.
 func _beats() -> Array:
 	if outcome == "car":
 		return [[2.8, 1, "step"], [4.9, 1, "hit"]]
-	if want_len > 0.0 and want_len <= 20.0:
-		return [[2.6, 1, "step"], [5.0, -1, "kick"], [5.5, 1, "brake"]]
-	if want_len > 32.0:
-		return [[2.8, 1, "step"], [4.9, 1, "dive"], [7.1, -1, "vault"], [9.3, 1, "step"], [11.4, 1, "dive"],
-			[13.8, -1, "kick"], [14.3, 1, "brake"]]
-	return [[2.8, 1, "step"], [4.9, 1, "dive"], [7.1, -1, "vault"], [9.4, -1, "kick"], [9.9, 1, "brake"]]
+	var pool := ["step", "dive", "vault", "crash2", "pole", "hide", "roofstep"]
+	var dur := {"step": 2.2, "dive": 2.4, "vault": 2.4, "crash2": 2.6, "pole": 2.8, "hide": 3.4, "roofstep": 2.4}
+	var from := {"step": 1, "dive": 1, "vault": -1, "crash2": 1, "pole": 1, "hide": -1, "roofstep": -1}
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(d.seed_n) * 7919 + 11
+	for i in range(pool.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var tmp: String = pool[i]
+		pool[i] = pool[j]
+		pool[j] = tmp
+	var k := 1 if (want_len > 0.0 and want_len <= 20.0) else (5 if want_len > 32.0 else 3)
+	var out := []
+	var at := 4.6 if pool[0] == "hide" else 2.8
+	for i in k:
+		out.append([at, from[pool[i]], pool[i]])
+		at += float(dur[pool[i]])
+	out.append([at, -1, "kick"])
+	out.append([at + 0.5, 1, "brake"])
+	return out
 
 ## How much clear street he needs ahead of where he lands (he runs most of it; the last cars wait beyond).
 func _need_ahead() -> float:
@@ -943,16 +994,28 @@ const NEED_BEHIND := 22.0
 func _street_room(p: Vector2, dir: Vector2) -> float:
 	return minf(_open_run(p, dir, _need_ahead() + 10.0) / _need_ahead(), _open_run(p, -dir, NEED_BEHIND + 8.0) / NEED_BEHIND)
 
-## Which side of him a car he dodges goes by: away from the way the dodge takes him (a near miss, not a hit).
-func _dodge_off(what: String, i: int) -> float:
-	if what != "step" and what != "dive":
-		return 0.0
-	var side := 1.0 if i % 2 == 1 else -1.0
-	var c := ("dodge_l" if side > 0.0 else "dodge_r") if what == "step" else "dive_roll"
+## A lamp post (or any thin post) beside the street near where he will be: [along, to the side], or INF.
+func _find_pole(est: float) -> Vector2:
+	var best := Vector2.INF
+	for c in g.world.col:
+		if float(c[1]) - float(c[0]) > 0.7 or float(c[5]) - float(c[4]) > 0.7 or float(c[3]) < 2.5 or float(c[2]) > 0.5:
+			continue
+		var q := Vector2((float(c[0]) + float(c[1])) * 0.5, (float(c[4]) + float(c[5])) * 0.5) - (st.p0 as Vector2)
+		var a := q.dot(st.dir)
+		var l := q.dot(st.n)
+		if absf(a - est) < 6.0 and absf(l) > 1.8 and absf(l) < 7.5 and (best == Vector2.INF or absf(a - est) < absf(best.x - est)):
+			best = Vector2(a, l)
+	return best
+
+## Which way (along the street's side) a dodge clip takes him: +1 / -1 (side if it hardly moves him).
+func _dodge_side(c: String, yaw_add: float, side: float) -> float:
 	var r := man._root(c, man._len(c))
-	var yaw := atan2(st.dir.x, st.dir.y) + (side * 0.5 if what == "dive" else 0.0)
-	var lat := (Basis(Vector3.UP, yaw) * Vector3(r.x, 0.0, r.y)).dot(Vector3(st.n.x, 0.0, st.n.y))
-	return -(signf(lat) if absf(lat) > 0.3 else side) * 2.2
+	var lat := (Basis(Vector3.UP, atan2(st.dir.x, st.dir.y) + yaw_add) * Vector3(r.x, 0.0, r.y)).dot(Vector3(st.n.x, 0.0, st.n.y))
+	return signf(lat) if absf(lat) > 0.3 else side
+
+## Where he crouches behind the car he hides behind.
+func _spot(sh: Dictionary) -> float:
+	return float(sh.s_meet) - float(sh.c.size.x) * 0.5 - 0.75
 
 func _park_away(c: Dictionary) -> void:
 	if c.box >= 0:
@@ -968,6 +1031,28 @@ func _park_away(c: Dictionary) -> void:
 func _street_at(along: float, side: float) -> Vector2:
 	return (st.p0 as Vector2) + (st.dir as Vector2) * along + (st.n as Vector2) * side
 
+## The landing in the street knocks the parked cars round him over, flying away from him (the ones in the street
+## off to its side, out of the way of the chase).
+func _shockwave(at: Vector3, u: Vector2, t: float) -> void:
+	var n := 0
+	for c in g.veh.cars:
+		if c.state != "parked" or c.node == null:
+			continue
+		var q: Vector2 = (c.pos as Vector2) - Vector2(at.x, at.z)
+		var dd := q.length()
+		if dd > 16.0 or dd < 0.5:
+			continue
+		var across := q.dot(u)
+		if absf(across) > 4.5:
+			if absf(across) / dd > 0.5:
+				g.veh.knock(c, q / dd, clampf(1.2 - dd / 16.0, 0.3, 1.0))
+				n += 1
+		else:
+			g.veh.knock(c, (u * (1.0 if across >= 0.0 else -1.0) + q / dd * 0.3).normalized(), clampf(1.2 - dd / 16.0, 0.65, 1.0))
+			n += 1
+	if n > 0:
+		d.mark("shockwave", t)
+
 ## One frame in the street: the cars, then him.
 func _street(dt: float, t: float) -> void:
 	st_t += dt
@@ -976,13 +1061,38 @@ func _street(dt: float, t: float) -> void:
 	var yaw_dir := atan2(dir.x, dir.y)
 	match mode:
 		"street":
+			# flat out; over towards a lamp post, or to the car he will hide behind, on time
+			var want := SPRINT
+			st.want_off = st_off
+			for e in cars_on:
+				if e.done:
+					continue
+				if e.what == "pole":
+					var pl: Vector2 = e.pole
+					var lf: float = float(e.t) - 0.3 - st_t
+					if lf < 4.0:
+						st.want_off = pl.y - signf(pl.y) * 0.6
+						if lf > 0.3:
+							want = clampf((pl.x - st_s) / lf, 4.2, 7.2)
+				elif e.what == "hide":
+					var sh: Dictionary = e.shield
+					var lf: float = float(e.t) - 1.2 - st_t
+					if lf < 4.0:
+						st.want_off = float(sh.lane)
+						if lf > 0.3:
+							want = clampf((_spot(sh) - st_s) / lf, 4.0, 7.2)
+				break
+			var off0 := st_off
+			st_off = move_toward(st_off, float(st.want_off), 1.4 * dt)
+			var lat := (st_off - off0) / maxf(dt, 1e-4)
+			var face := (dir * maxf(man.speed, 1.0) + (st.n as Vector2) * lat).normalized()
 			var yaw0 := man.yaw
-			var step := man.move(dt, dir, SPRINT, false)
+			var step := man.move(dt, face, want, false)
 			man.real_speed = man.speed
-			st_s += step.length()
+			st_s += step.length() * dir.dot(face)
 			var p := _street_at(st_s, st_off)
 			man.position = Vector3(p.x, float(st.y), p.y)
-			man.yaw = rotate_toward(yaw0, yaw_dir, 6.0 * dt)
+			man.yaw = rotate_toward(yaw0, atan2(face.x, face.y), 6.0 * dt)
 			man.turn_rate = angle_difference(yaw0, man.yaw) / maxf(dt, 1e-4)
 			man.rotation.y = man.yaw
 			man.animate(dt)
@@ -992,14 +1102,24 @@ func _street(dt: float, t: float) -> void:
 			for e in cars_on:
 				if e.done:
 					continue
-				var lead: float = {"step": 0.45, "dive": 0.6, "vault": 0.36, "kick": float(man.meta.kick.hit) + 0.05, "brake": -99.0, "hit": -99.0}[e.what]
-				if st_t >= float(e.t) - lead:
-					_street_move(e, t)
+				if e.what == "pole":
+					if st_s > float(e.pole.x) + 0.5:
+						e.done = true
+						continue
+				elif e.what == "hide":
+					if st_s >= _spot(e.shield) - 0.25:
+						_street_move(e, t)
+				elif e.what != "hit":
+					var lead: float = LEADS.get(e.what, float(man.meta.kick.hit) + 0.05)
+					if st_t >= float(e.t) - lead:
+						_street_move(e, t)
 				break
 		"dodge":
-			# the clip carries him aside (its own steps); then he runs on from where it left him
+			# the clip carries him aside, and the push gets him out of its way; then he runs on from there
 			var step := man.move(dt, Vector2(), 0.0, false)
-			man.position += step
+			var k0 := _ease((tmr - dt) / 0.42)
+			var k1 := _ease(tmr / 0.42)
+			man.position += step + (st.push as Vector3) * (k1 - k0)
 			man.position.y = float(st.y)
 			man.rotation.y = man.yaw
 			man.animate(dt)
@@ -1019,7 +1139,19 @@ func _street(dt: float, t: float) -> void:
 			man.rotation.y = man.yaw
 			man.animate(dt)
 			_street_resync()
-			if tmr >= T:
+			if tmr >= T and fl.get("step2", false):
+				# a foot on its roof as it goes under him, and off it again
+				var vy2 := 4.2
+				var yl := float(st.y) + man.clip_hips(c, ld).y
+				fl.T = (vy2 + sqrt(vy2 * vy2 + 2.0 * 9.81 * maxf(hips.y - yl, 0.0))) / 9.81
+				fl.hips0 = hips
+				fl.vy = vy2
+				fl.step2 = false
+				man.jump(c, tk, 0.06)
+				tmr = 0.0
+				shake = maxf(shake, 0.15)
+				d.mark("roofstep", t)
+			elif tmr >= T:
 				man.position.y = float(st.y)
 				man.jump_rate = 1.5
 				mode = "vault_land"
@@ -1034,6 +1166,18 @@ func _street(dt: float, t: float) -> void:
 			_street_resync()
 			if man.ct >= float(man.meta[fl.clip].land) + 0.3 and man.run_on():
 				mode = "street"
+		"hide":
+			# down behind it until it has been hit, then up and on
+			var up: bool = st.has("hide_hit") and st_t - float(st.hide_hit) > 0.55
+			man.move(dt, Vector2(), 0.0, not up)
+			var p := _street_at(st_s, st_off)
+			man.position = Vector3(p.x, float(st.y), p.y)
+			man.yaw = rotate_toward(man.yaw, yaw_dir, 6.0 * dt)
+			man.rotation.y = man.yaw
+			man.animate(dt)
+			if (up and st_t - float(st.hide_hit) > 1.1) or tmr > 4.5:
+				st.erase("hide_hit")
+				mode = "street"
 		"kick", "after":
 			var step := man.move(dt, Vector2(), 0.0, false)
 			man.position += step
@@ -1045,8 +1189,121 @@ func _street(dt: float, t: float) -> void:
 				man._to(Man.IDLE, 0.5)
 				man.idle_t = 0.0
 				mode = "after"
-			if mode == "after" and tmr > 2.2:
-				d.end_after(t, 0.3)
+			if mode == "after":
+				var vic := {}
+				for e in cars_on:
+					if e.what == "brake" and e.c.state == "driven":
+						vic = e
+				if not vic.is_empty() and tmr > 1.6:
+					_stomp_begin(vic, t)
+				elif vic.is_empty() and tmr > 2.2:
+					d.end_after(t, 0.3)
+		"anger":
+			# he has had enough: round to face the one behind him
+			man.move(dt, Vector2(), 0.0, false)
+			man.position.y = float(st.y)
+			var cp: Vector2 = st.victim.pos
+			man.yaw = rotate_toward(man.yaw, atan2(cp.x - man.position.x, cp.y - man.position.z), 4.5 * dt)
+			man.turn_rate = 0.0
+			man.rotation.y = man.yaw
+			man.animate(dt)
+			if tmr > 1.1:
+				man.jump("gap_jump", float(man.meta.gap_jump.land) + 0.06, 0.16)
+				man.jump_rate = 0.0
+				mode = "crouch2"
+				tmr = 0.0
+		"crouch2":
+			man.move(dt, Vector2(), 0.0, false)
+			man.position.y = float(st.y)
+			man.rotation.y = man.yaw
+			man.animate(dt)
+			var k := clampf(tmr / 0.22, 0.0, 1.0)
+			d._absorb(0.32 * k * k * (3.0 - 2.0 * k))
+			if tmr >= 0.3:
+				_stomp_launch(t)
+		"stomp_air":
+			var T: float = fl.T
+			var tau := minf(tmr, T)
+			var hips: Vector3 = fl.hips0 + (fl.vh as Vector3) * tau + Vector3(0.0, float(fl.vy) * tau - 0.5 * GS * tau * tau, 0.0)
+			var x := tau / T
+			var cm: Dictionary = man.meta.gap_jump
+			var ct: float
+			if x < 0.22:
+				ct = lerpf(float(cm.takeoff), APEX_CT, _ease(x / 0.22))
+			elif x < 0.72:
+				ct = APEX_CT
+			else:
+				ct = lerpf(APEX_CT, float(cm.land), _ease((x - 0.72) / 0.28))
+			man.ct = ct
+			man.position = hips - Basis(Vector3.UP, man.yaw) * man.clip_hips("gap_jump", ct)
+			man.rotation.y = man.yaw
+			man.animate(dt)
+			_fly_pose(_ease((x - 0.06) / 0.14) * (1.0 - _ease((x - 0.8) / 0.12)), clampf((float(fl.vy) - GS * tau) / 10.0, -1.0, 1.0))
+			if tmr >= T:
+				# onto its roof: the roof caves in, the glass goes, it is done for
+				man.ct = float(cm.land) + 0.06
+				man.jump_rate = 0.0
+				mode = "stomp"
+				tmr = 0.0
+				var c: Dictionary = st.victim
+				var at := Vector3(man.position.x, float(st.y) + float(c.size.y), man.position.z)
+				fx.burst("shock", at, Vector3.UP)
+				fx.burst("impact", at + Vector3(0, 0.3, 0), Vector3.UP)
+				shake = 0.7
+				g.veh._smoke(c)
+				g.world.move_car_halos(c.i, g.veh.xform(c), true)
+				d.mark("stomp", t)
+		"stomp", "top":
+			var c: Dictionary = st.victim
+			st.crush = minf(float(st.get("crush", 0.0)) + dt / 0.12, 1.0)
+			var k := lerpf(1.0, 0.58, _ease(float(st.crush)))
+			var tr: Transform3D = g.veh.xform(c)
+			tr.basis = tr.basis * Basis.from_scale(Vector3(1.0, k, 1.0))
+			(c.node as Node3D).transform = tr
+			man.move(dt, Vector2(), 0.0, false)
+			man.position.y = float(st.y) + float(c.size.y) * k
+			man.rotation.y = man.yaw
+			man.animate(dt)
+			if mode == "stomp":
+				hero_w = clampf(tmr / 0.07, 0.0, 1.0)
+				_hero_pose(hero_w)
+				if tmr >= 0.9:
+					man._to(Man.IDLE, 0.7)
+					man.idle_t = 0.0
+					hero_fade = 1.0 / 0.9
+					mode = "top"
+					tmr = 0.0
+			else:
+				hero_w = maxf(0.0, hero_w - hero_fade * dt)
+				_hero_pose(hero_w)
+				if tmr > 2.6:
+					d.end_after(t, 0.5)
+
+func _stomp_begin(e: Dictionary, t: float) -> void:
+	st.victim = e.c
+	mode = "anger"
+	tmr = 0.0
+	d.mark("anger", t)
+
+## Up off the street and down onto the roof of the one behind him.
+func _stomp_launch(t: float) -> void:
+	var c: Dictionary = st.victim
+	var cm: Dictionary = man.meta.gap_jump
+	var hips0 := _hips()
+	var roof := float(st.y) + float(c.size.y) * 0.95
+	var y1 := roof + man.clip_hips("gap_jump", float(cm.land)).y
+	var top := roof + 2.4
+	var vy := sqrt(2.0 * GS * maxf(top - hips0.y, 0.5))
+	var T := vy / GS + sqrt(2.0 * maxf(top - y1, 0.05) / GS)
+	var to := Vector3(c.pos.x - hips0.x, 0.0, c.pos.y - hips0.z)
+	man.yaw = atan2(to.x, to.z)
+	man.jump("gap_jump", float(cm.takeoff) - 0.04, 0.08)
+	man.jump_rate = 1.0
+	fl = {"hips0": hips0, "vh": to / T, "vy": vy, "T": T}
+	mode = "stomp_air"
+	tmr = 0.0
+	fx.burst("puff", Vector3(hips0.x, float(st.y), hips0.z), Vector3.UP)
+	d.mark("launch_s", t)
 
 ## Where along the street and how far to its side he now is.
 func _street_resync() -> void:
@@ -1054,29 +1311,45 @@ func _street_resync() -> void:
 	st_s = q.dot(st.dir)
 	st_off = q.dot(st.n)
 
-## He answers a car: a side step, a dive and roll (off at an angle), a leap over it, a kick.
+## He answers a car: a side step or a dive and roll (each with a push out of its way), a leap over it, a foot on
+## its roof, a kick, ducking behind a car.
 func _street_move(e: Dictionary, t: float) -> void:
 	e.done = true
 	tmr = 0.0
-	var side := 1.0 if (e.i % 2) == 1 else -1.0
+	var side := 1.0 if (int(e.i) % 2) == 1 else -1.0
+	var n3 := Vector3(st.n.x, 0.0, st.n.y)
 	match e.what:
-		"step":
-			man.jump("dodge_l" if side > 0.0 else "dodge_r", -1.0, 0.15)
+		"step", "crash2":
+			var c := "dodge_l" if side > 0.0 else "dodge_r"
+			man.jump(c, -1.0, 0.15)
+			var s := _dodge_side(c, 0.0, side)
+			st.push = n3 * s * 2.3
+			st.push_s = s
 			mode = "dodge"
 			d.mark("dodge_%d" % e.i, t)
 		"dive":
 			man.jump("dive_roll", -1.0, 0.15)
 			man.yaw += side * 0.5
+			var s := _dodge_side("dive_roll", side * 0.5, side)
+			st.push = n3 * s * 1.6
+			st.push_s = s
 			mode = "dodge"
 			d.mark("dive_%d" % e.i, t)
-		"vault":
+		"vault", "roofstep":
 			var foot := 0 if fposmod(man.phase - toe[0], 1.0) < 0.5 else 1
 			var c := "gap_jump" if foot == 0 else "gap_jump_r"
 			var hips0 := _hips()
-			var vy := 6.0
-			man.jump(c, float(man.meta[c].takeoff), 0.12)
 			var dir: Vector2 = st.dir
-			fl = {"clip": c, "hips0": hips0, "vh": Vector3(dir.x, 0.0, dir.y) * maxf(man.speed, 5.0), "vy": vy, "T": 2.0 * vy / 9.81}
+			var vy := 6.0
+			var T := 2.0 * vy / 9.81
+			if e.what == "roofstep":
+				# up to its roof just as it gets to him
+				var tau := maxf(float(e.t) - st_t, 0.2)
+				vy = (float(st.y) + float(e.c.size.y) + 1.05 - hips0.y + 4.905 * tau * tau) / tau
+				T = tau
+			man.jump(c, float(man.meta[c].takeoff), 0.12)
+			fl = {"clip": c, "hips0": hips0, "vh": Vector3(dir.x, 0.0, dir.y) * maxf(man.speed, 5.0), "vy": vy, "T": T,
+				"step2": e.what == "roofstep"}
 			mode = "vault"
 			d.mark("vault_%d" % e.i, t)
 		"kick":
@@ -1091,30 +1364,55 @@ func _street_move(e: Dictionary, t: float) -> void:
 			var cp := _street_at(st_s + 0.9, st_off)
 			kick_cam = {"at": Vector3(cp.x, float(st.y), cp.y)}
 			d.mark("plant", t)
+		"hide":
+			man._play(Man.CROUCH_IN, "crouch_in", 0.0, 0.25)
+			man.speed = 0.0
+			mode = "hide"
+			d.mark("duck", t)
+
+## The first car the camera should be watching for: the next one to get to him (or the one just done, a moment more).
+func _cam_entry() -> Dictionary:
+	for e in cars_on:
+		if e.what in ["brake", "crash2_h", "shield"] or e.past:
+			continue
+		if e.has("past_at") and st_t > float(e.past_at) + 1.0:
+			continue
+		return e
+	return {}
 
 ## The cars: each from where it waited, timed to reach him at its moment (off as late as it can, flat out as it gets
-## there; the last one braking to a stop behind him); the ones he got away from spin out once past.
+## there; the last one, and the one he hides behind, braking to a stop); then whatever it runs into.
 func _street_cars(dt: float, t: float) -> void:
 	var dir: Vector2 = st.dir
+	var nv: Vector2 = st.n
 	var kick_at := 99.0
 	for e in cars_on:
 		if e.what == "kick":
 			kick_at = float(e.t) - float(man.meta.kick.hit) - 0.05
+	var stop_pred: float = float(st.get("stop", st_s + SPRINT * maxf(kick_at - st_t, 0.0)))
 	for e in cars_on:
 		var c: Dictionary = e.c
 		if c.state != "driven":
 			continue
 		var tm: float = e.t
 		var left := tm - st_t
-		if not e.fixed and (left > 0.55 or e.what == "kick" or e.what == "brake"):
+		if e.what == "hide" and e.has("shield"):
+			# at the car he is hiding behind, nose to nose
+			var sh: Dictionary = e.shield
+			e.s_meet = float(sh.s_meet) + float(sh.c.size.x) * 0.5 + float(c.size.x) * 0.5
+			e.lane = sh.lane
+		elif not e.fixed and (left > 0.8 or e.what == "kick" or e.what == "brake"):
 			# aimed at where he will be when it gets there (the kick and the one behind: where he stops)
 			var aim := st_s + SPRINT * left
-			if e.what == "kick" or e.what == "brake":
-				aim = float(st.get("stop", st_s + SPRINT * maxf(kick_at - st_t, 0.0)))
-				aim += 0.9 + float(c.size.x) * 0.5 if e.what == "kick" else -5.5
+			if e.what == "kick":
+				aim = stop_pred + 0.9 + float(c.size.x) * 0.5
+			elif e.what == "brake":
+				aim = stop_pred - 5.5
+			elif e.what == "shield":
+				aim = st_s + SPRINT * maxf(left + 1.0, 0.0) + float(c.size.x) * 0.5 + 0.75
 			e.s_meet = aim if not e.get("aimed", false) else lerpf(float(e.s_meet), aim, 1.0 - exp(-dt / 0.35))
 			e.aimed = true
-			e.lane = st_off + float(e.lane_off)
+			e.lane = st_off
 		elif not e.fixed:
 			e.fixed = true
 		var v: float = e.v
@@ -1123,10 +1421,9 @@ func _street_cars(dt: float, t: float) -> void:
 		var along: float
 		var x := 1.0
 		if e.has("skid"):
-			# it hit him: braking hard to a stop
 			var tau := minf(st_t - float(e.skid[1]), v / 9.0)
 			along = float(e.skid[0]) + float(e.from) * (v * tau - 4.5 * tau * tau)
-		elif e.what == "brake":
+		elif e.what == "brake" or e.what == "shield":
 			var T := maxf(minf(1.5 * L / v, tm), 0.05)
 			x = (st_t - (tm - T)) / T
 			var xc := clampf(x, 0.0, 1.0)
@@ -1143,13 +1440,12 @@ func _street_cars(dt: float, t: float) -> void:
 				f = 1.0 + (2.0 - a) * (x - 1.0)
 			along = float(e.start) + D * f
 		var heading := dir * float(e.from)
-		var p := _street_at(along, lerpf(float(e.lane0), float(e.lane), _ease(clampf(x * 1.6, 0.0, 1.0))))
+		var p := _street_at(along, lerpf(float(e.lane0), float(e.lane), _ease(x * 1.6)))
 		c.pos = p
 		c.yaw = atan2(-heading.y, heading.x)
 		c.y = float(st.y)
 		g.veh._apply(c)
-		var gap := absf(along - st_s)
-		if gap < 4.0 and not e.has("passed_mark") and e.what != "brake":
+		if absf(along - st_s) < 4.0 and not e.has("passed_mark") and e.what != "brake" and e.what != "shield":
 			e.passed_mark = true
 			d.mark("pass_%d" % e.i, t)
 		match e.what:
@@ -1172,7 +1468,44 @@ func _street_cars(dt: float, t: float) -> void:
 					d.mark("hit", t)
 					man.yaw = atan2(heading.x, heading.y)
 					_thrown(Vector3(heading.x, 0.0, heading.y) * v * 0.7 + Vector3(0, 5.5, 0), 9.81, 1.0, float(st.y), _hips())
-			"step", "dive", "vault":
+			"crash2":
+				var pr = e.get("pair")
+				if pr != null and not e.has("bang") and left <= (float(c.size.x) + float(pr.c.size.x)) * 0.5 / (v + float(pr.v)):
+					# the two of them, head on, where he was
+					e.bang = true
+					e.past_at = st_t
+					var away := -float(st.get("push_s", 1.0))
+					var mid := Vector3(p.x, float(st.y) + 0.8, p.y) + Vector3(dir.x, 0.0, dir.y) * float(c.size.x) * 0.5
+					g.veh.knock(c, (dir + nv * away * 0.6).normalized(), 1.0)
+					g.veh.knock(pr.c, (-dir + nv * away * 0.6).normalized(), 1.0)
+					fx.burst("impact", mid, Vector3(nv.x * away, 0.6, nv.y * away))
+					shake = maxf(shake, 0.5)
+					d.mark("crash2", t)
+			"pole":
+				if left <= 0.0 and not e.has("bang"):
+					e.bang = true
+					e.past_at = st_t
+					var pl: Vector2 = e.pole
+					var pp := _street_at(pl.x, pl.y)
+					g.veh.knock(c, (dir + nv * signf(pl.y) * 0.5).normalized(), 0.9)
+					fx.burst("impact", Vector3(pp.x, float(st.y) + 0.9, pp.y), Vector3(-dir.x, 0.5, -dir.y))
+					shake = maxf(shake, 0.35)
+					d.mark("polehit", t)
+			"hide":
+				if left <= 0.0 and e.has("shield") and not e.has("bang"):
+					# it rams the car he is behind, which goes skidding off, and goes over him
+					e.bang = true
+					e.past_at = st_t
+					st.hide_hit = st_t
+					var sc: Dictionary = e.shield.c
+					var sg := 1.0 if randf() < 0.5 else -1.0
+					sc.state = "parked"
+					g.veh.shove(sc, nv * sg * 7.5 - dir * 1.0, 2.2 * sg)
+					g.veh.knock(c, -dir, 1.3)
+					fx.burst("impact", Vector3(p.x, float(st.y) + 0.8, p.y) - Vector3(dir.x, 0.0, dir.y) * float(c.size.x) * 0.5, Vector3(-dir.x, 0.6, -dir.y))
+					shake = maxf(shake, 0.5)
+					d.mark("smash", t)
+			"step", "dive", "vault", "roofstep":
 				if left < -0.7 and not e.past:
 					# past him: it spins out
 					e.past = true
@@ -1180,7 +1513,7 @@ func _street_cars(dt: float, t: float) -> void:
 					var away := signf(float(e.lane) - st_off)
 					if away == 0.0:
 						away = 1.0 if randf() < 0.5 else -1.0
-					g.veh.shove(c, heading * v * 0.6 + (st.n as Vector2) * away * randf_range(6.0, 7.5), randf_range(1.6, 2.8) * away)
+					g.veh.shove(c, heading * v * 0.6 + nv * away * randf_range(6.0, 7.5), randf_range(1.6, 2.8) * away)
 					d.mark("spin_%d" % e.i, t)
 
 # ---------------------------------------------------------------- thrown: hit by a car, or off a wall
@@ -1249,6 +1582,8 @@ func step(t: float) -> void:
 					want = 0.35
 			"thrown":
 				want = 0.4 if tmr < 0.3 else 1.0
+			"stomp":
+				want = 0.4 if tmr < 0.35 else 1.0
 	elif m.slow:
 		match mode:
 			"air":
@@ -1290,7 +1625,7 @@ func cut(_t: float) -> String:
 	return shot
 
 const SHOTS := ["sr_chase", "sr_launch", "sr_after", "sr_hop", "sr_orbit", "sr_land", "sr_dive", "sr_ground",
-	"sc_air", "sc_front", "sc_back", "sc_kick", "sc_fall", "sc_getup"]
+	"sc_air", "sc_front", "sc_back", "sc_kick", "sc_fall", "sc_getup", "sc_side", "sc_face", "sc_stomp", "sc_top"]
 
 ## The chase: behind him on the roofs and through the air; the street drop seen from below; in the street ahead
 ## of him looking back while a car comes up behind, behind him while one comes at him; beside the kick (or the hit).
@@ -1312,10 +1647,22 @@ func _chase_cut(m: Dictionary) -> String:
 			return "sr_ground"
 		"kick", "after":
 			return "sc_kick"
-	for e in cars_on:
-		if not e.past and e.what != "brake":
-			return "sc_front" if int(e.from) > 0 else "sc_back"
-	return "sc_back"
+		"hide":
+			return "sc_back"
+		"anger":
+			return "sc_face"
+		"crouch2", "stomp_air":
+			return "sc_stomp"
+		"stomp":
+			return "sc_stomp" if tmr < 0.5 else "sc_top"
+		"top":
+			return "sc_top"
+	var e := _cam_entry()
+	if e.is_empty():
+		return "sc_back"
+	if e.what == "crash2" and float(e.t) - st_t < 2.0:
+		return "sc_side"
+	return "sc_front" if int(e.from) > 0 else "sc_back"
 
 func _run_cut(m: Dictionary) -> String:
 	var shot := "sr_chase"
@@ -1449,8 +1796,64 @@ func camera(mode_name: String, t: float) -> Array:
 				if kick_cam.has("car"):
 					var cp: Vector3 = g.veh.xform(kick_cam.car).origin + Vector3(0, 0.6, 0)
 					var kk := _ease((tmr - float(kick_cam.k_tmr)) / 0.7)
-					look = look.lerp(cp, kk * 0.7)
+					look = look.lerp(cp, kk * 0.45)
+					look.y = minf(look.y, hips.y + 2.0)
 					fov = lerpf(fov, 66.0, kk)
+		"sc_side":
+			# beside the street, square on to where the two of them will meet
+			var e := _cam_entry()
+			var key := "side_%d" % int(e.get("i", 0))
+			if not kick_cam.has(key):
+				var a2 := _street_at(float(e.get("s_meet", st_s)), float(e.get("lane", st_off)))
+				var at := Vector3(a2.x, float(st.y), a2.y)
+				var sn := Vector3(st.n.x, 0.0, st.n.y)
+				var sd := Vector3(st.dir.x, 0.0, st.dir.y)
+				var bp := at + Vector3(0, 5.0, 0) - sd * 6.0
+				var room := 0.0
+				for sg in [1.0, -1.0]:
+					var q: Vector3 = d.pulled(at + Vector3(0, 1.2, 0), at + sn * sg * 8.0 - sd * 1.5 + Vector3(0, 1.4, 0))
+					if q.distance_to(at) > room:
+						room = q.distance_to(at)
+						bp = q
+				kick_cam[key] = [bp, at]
+			pos = kick_cam[key][0]
+			look = (kick_cam[key][1] as Vector3) + Vector3(0, 0.8, 0)
+			fov = 64.0
+		"sc_face":
+			# close on his face, from between him and the car he is about to crush
+			var cp: Vector2 = st.victim.pos
+			var head := hips + Vector3(0, 0.62, 0)
+			var f := Vector3(cp.x - head.x, 0.0, cp.y - head.z).normalized()
+			pos = head + f * 1.3 + Vector3(-f.z, 0.0, f.x) * 0.3
+			look = head
+			fov = 40.0
+		"sc_stomp":
+			# off to the side, low: up off the street and down onto it
+			var c: Dictionary = st.victim
+			var cp := Vector3(c.pos.x, float(st.y), c.pos.y)
+			if not kick_cam.has("stomp"):
+				var mid := (Vector3(man.position.x, float(st.y), man.position.z) + cp) * 0.5
+				var sn := Vector3(st.n.x, 0.0, st.n.y)
+				var bp := mid + Vector3(0, 6.0, 0)
+				var room := 0.0
+				for sg in [1.0, -1.0]:
+					var q: Vector3 = d.pulled(mid + Vector3(0, 1.2, 0), mid + sn * sg * 7.0 + Vector3(0, 1.8, 0))
+					if q.distance_to(mid) > room:
+						room = q.distance_to(mid)
+						bp = q
+				kick_cam.stomp = bp
+			pos = kick_cam.stomp
+			look = hips.lerp(cp + Vector3(0, 1.2, 0), 0.35)
+			fov = 60.0
+		"sc_top":
+			# round him, standing on the wreck
+			var a: float = float(kick_cam.get("top_a", 0.0)) + (d.now() - float(kick_cam.get("top_t0", d.now()))) * 0.5
+			if not kick_cam.has("top_a"):
+				kick_cam.top_a = atan2(d.cam_p.z - hips.z, d.cam_p.x - hips.x)
+				kick_cam.top_t0 = d.now()
+			pos = d.pulled(hips + Vector3(0, 0.5, 0), hips + Vector3(cos(a), 0.0, sin(a)) * 5.0 + Vector3(0, 0.9, 0))
+			look = hips + Vector3(0, 0.15, 0)
+			fov = 60.0
 		"sc_getup":
 			# low, a few metres off, where he came down: he rolls and gets up
 			var at: Vector3 = kick_cam.get("getup", hips)
@@ -1471,7 +1874,7 @@ func camera(mode_name: String, t: float) -> Array:
 	# never inside a building: pulled in short of the first wall between him and the camera
 	if mode_name in ["sc_front", "sc_back"]:
 		pos = d.pulled(Vector3(hips.x, float(st.y) + 1.0, hips.z), pos)
-	elif not mode_name in ["sr_chase", "sr_after", "sc_kick", "sc_fall", "sc_getup"]:
+	elif (mode_name.begins_with("sr_") and mode_name != "sr_chase" and mode_name != "sr_after") or mode_name == "sc_air":
 		pos = d.pulled(hips, pos)
 	# the shake of a hard landing
 	if shake > 0.0:

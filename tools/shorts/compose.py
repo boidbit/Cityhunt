@@ -45,8 +45,8 @@ TITLES = {
                 "Flat Out Over the Rooftops 😱", "One Run, Every Roof 🏃🏙️"],
     "superrun": ["He Jumped 20 Floors Up 😳", "Superhero Run Across the City 🦸", "Nothing Can Stop Him 💥",
                  "The Landing at the End 😱", "Day 1 With Superpowers 🦸💥"],
-    "superchase": ["Every Car in the City Is After Him 😳", "He Kicked a Car Away 💥", "Superhero vs Traffic 🦸🚗",
-                   "Run. Dodge. Kick. 💥", "The Last Car Never Saw It Coming 😱"],
+    "superchase": ["Every Car in the City Is After Him 😳", "He Crushed the Car With One Jump 💥", "Superhero vs Traffic 🦸🚗",
+                   "Run. Dodge. Crush. 💥", "The Last Car Never Saw It Coming 😱"],
     # (superchase when it goes wrong: he comes up short of a roof, or a car gets him)
     "superchase_fail": ["He Almost Made It… 😬", "Superpowers Aren't Everything 😳", "Not Every Jump Works Out… 😱",
                         "One Mistake Was Enough 😬", "Day 1 With Superpowers Went Wrong 😳"],
@@ -64,8 +64,9 @@ STORY = {
                "stopping. (3D animation: motion-captured movement in a game engine city.)",
     "superrun": "Across the city over its roofs: up twenty metres in one leap, off the top again, flips, superhero "
                 "landings, and a drop all the way to the street. (3D animation made in a game engine.)",
-    "superchase": "Over the roofs and down to the street, where every car in the city comes after him. He dodges "
-                  "them, leaps one, and kicks the last one away. (3D animation made in a game engine.)",
+    "superchase": "Over the roofs and down to the street, where every car in the city comes after him. He dodges, "
+                  "hides and leaps, makes them crash, kicks one away, and when he has had enough he crushes the last "
+                  "one with one jump. (3D animation made in a game engine.)",
     "superchase_fail": "Over the roofs and down to the street with every car after him, but this time it doesn't "
                        "go to plan. (3D animation made in a game engine: nobody gets hurt.)",
 }
@@ -145,6 +146,23 @@ def effects(name, n):
                 ("clang_3", 0.9, 1.0, 0.8), ("thud_3", 1.0, 1.0, 0.7), ("shatter_2", 0.6, 1.05, 0.9)]
     if name == "hit":
         return [("thud_1", 1.0, 0, 1), ("clang_1", 1.0, 0, 0.9), ("shatter_2", 0.8, 0.02, 1), ("SUB", 1.0, 0, 1)]
+    if name == "crash2":
+        return [("boom_2", 1.0, 0, 0.9), ("clang_1", 1.0, 0.01, 0.9), ("clang_2", 0.9, 0.03, 1), ("shatter_1", 1.0, 0.03, 1),
+                ("SUB", 1.0, 0, 1), ("thud_3", 0.9, 0.9, 0.8)]
+    if name in ("polehit", "smash"):
+        return [("boom_1", 1.0, 0, 0.9), ("clang_3", 1.0, 0.01, 0.8), ("shatter_2", 0.9, 0.03, 1), ("SUB", 0.9, 0, 1),
+                ("thud_3", 0.8, 0.8, 0.8)]
+    if name == "duck":
+        return [("step_dry_4", 0.9, 0, 0.9)]
+    if name == "roofstep":
+        return [("thud_2", 1.0, 0, 1.0), ("clang_3", 0.5, 0.01, 1.2)]
+    if name == "shockwave":
+        return [("boom_2", 0.8, 0.05, 0.7), ("clang_1", 0.7, 0.1, 0.8), ("shatter_1", 0.6, 0.12, 0.9), ("thud_1", 0.8, 0.7, 0.8)]
+    if name == "anger":
+        return [("heart", 1.0, 0, 0.8), ("SUB", 0.7, 0.4, 1)]
+    if name == "stomp":
+        return [("boom_2", 1.0, 0, 0.75), ("SUB", 1.0, 0, 1), ("clang_2", 1.0, 0.01, 0.7), ("shatter_1", 1.0, 0.02, 1),
+                ("shatter_2", 0.9, 0.06, 0.9), ("thud_3", 1.0, 0.01, 0.6)]
     if name == "wallhit":
         return [("thud_2", 1.0, 0, 0.8), ("SUB", 0.8, 0, 1), ("step_dry_1", 0.7, 0.02, 0.7)]
     if name == "caught":

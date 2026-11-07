@@ -2454,7 +2454,7 @@ func camera(t: float, dt: float) -> void:
 				pos = on_b + d3 * 5.0 + n3 * 1.1 + Vector3(0, 0.9, 0)
 				look = on_b + Vector3(0, 1.0, 0) - d3 * 1.5
 				fov = 62.0
-		"sr_chase", "sr_after", "sr_launch", "sr_orbit", "sr_land", "sr_dive", "sr_ground", "sr_hop", "sc_air", "sc_fall", "sc_front", "sc_back", "sc_kick", "sc_getup":
+		"sr_chase", "sr_after", "sr_launch", "sr_orbit", "sr_land", "sr_dive", "sr_ground", "sr_hop", "sc_air", "sc_fall", "sc_front", "sc_back", "sc_kick", "sc_getup", "sc_side", "sc_face", "sc_stomp", "sc_top":
 			var cam: Array = sr.camera(mode, t)
 			pos = cam[0]
 			look = cam[1]
@@ -2520,7 +2520,7 @@ func camera(t: float, dt: float) -> void:
 	# a cameraman, not a rig bolted to the car: it eases after its mark within a shot, and cuts clean between
 	# (the superrun's set-ups follow him exactly: easing in game time, through slow motion, loses a man going
 	# up at 30 m/s)
-	if mode != last_mode or mode == "locked" or (mode.begins_with("sr_") and mode != "sr_chase" and mode != "sr_after") or mode in ["sc_air", "sc_fall", "sc_kick", "sc_getup"]:
+	if mode != last_mode or mode == "locked" or (mode.begins_with("sr_") and mode != "sr_chase" and mode != "sr_after") or mode in ["sc_air", "sc_fall", "sc_kick", "sc_getup", "sc_side", "sc_face", "sc_stomp", "sc_top"]:
 		cam_p = pos
 		cam_l = look
 	else:

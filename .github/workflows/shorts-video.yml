@@ -149,7 +149,10 @@ jobs:
 
       - name: Import the project
         working-directory: godot
-        run: ~/godot/godot --headless --path . --import
+        run: |
+          # the videos keep the full-size textures (for the APK the largest are capped, see their .import files)
+          sed -i 's/^process\/size_limit=.*/process\/size_limit=0/' $(grep -rl '^process/size_limit=[1-9]' assets --include=*.import)
+          ~/godot/godot --headless --path . --import
 
       - name: Check the director script
         working-directory: godot

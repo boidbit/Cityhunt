@@ -1215,7 +1215,7 @@ func _build_settings() -> void:
 			var was_low: bool = g.settings.gfx == "low"
 			g.settings.gfx = q
 			g.low_q = false
-			g.q1 = false
+			g.q1 = g.mobile
 			g.apply_gfx()
 			_sync_settings())
 		seg.add_child(b)

@@ -210,10 +210,10 @@ func update(dt: float) -> void:
 			want = 1.5 * minf(1.0, mag / 0.6)
 		elif can_sprint:
 			want = 6.6 if g.phase == "escape" and g.child.state == "follow" else 7.0
-		elif mag > 0.72:
+		elif mag > 0.62:
 			want = 4.4
 		else:
-			want = lerpf(0.9, 2.2, minf(1.0, mag / 0.72))
+			want = lerpf(0.9, 2.2, minf(1.0, mag / 0.62))
 	var dir := Vector2()
 	if mag > 0.08:
 		var fy := sin(cam_yaw)

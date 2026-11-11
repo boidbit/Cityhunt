@@ -43,25 +43,30 @@ func _ready() -> void:
 	_loop("engine_loop", "Engine")
 	_generate_horn()
 
+## The buses (and the compressor on the master) are made once per launch of the app: they outlive the game scene,
+## and making them again each time it is reloaded (a new game, back from a run) piled up dozens of buses, every
+## one with its filters still running, until the sound alone slowed the phone down.
 func _setup_buses() -> void:
-	var comp := AudioEffectCompressor.new()
-	comp.threshold = -14.0
-	comp.ratio = 4.0
-	comp.attack_us = 3000.0
-	comp.release_ms = 250.0
-	AudioServer.add_bus_effect(0, comp)
-	for n in ["RainHiss", "RainBody", "Wind", "Drone", "Engine"]:
-		var b := _add_bus(n)
-		var lp := AudioEffectLowPassFilter.new()
-		lp.cutoff_hz = 20000.0
-		AudioServer.add_bus_effect(b, lp)
+	if AudioServer.get_bus_index("Voice0") < 0:
+		var comp := AudioEffectCompressor.new()
+		comp.threshold = -14.0
+		comp.ratio = 4.0
+		comp.attack_us = 3000.0
+		comp.release_ms = 250.0
+		AudioServer.add_bus_effect(0, comp)
+		for n in ["RainHiss", "RainBody", "Wind", "Drone", "Engine"]:
+			var b := _add_bus(n)
+			var lp := AudioEffectLowPassFilter.new()
+			lp.cutoff_hz = 20000.0
+			AudioServer.add_bus_effect(b, lp)
+		for i in VOICES:
+			var b := _add_bus("Voice%d" % i)
+			var lp := AudioEffectLowPassFilter.new()
+			lp.cutoff_hz = 18000.0
+			AudioServer.add_bus_effect(b, lp)
+			AudioServer.add_bus_effect(b, AudioEffectPanner.new())
 	for i in VOICES:
-		var b := _add_bus("Voice%d" % i)
-		var lp := AudioEffectLowPassFilter.new()
-		lp.cutoff_hz = 18000.0
-		AudioServer.add_bus_effect(b, lp)
-		AudioServer.add_bus_effect(b, AudioEffectPanner.new())
-		voice_bus.append(b)
+		voice_bus.append(AudioServer.get_bus_index("Voice%d" % i))
 
 func _add_bus(n: String) -> int:
 	var b := AudioServer.bus_count

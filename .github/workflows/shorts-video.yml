@@ -14,7 +14,7 @@ on:
         description: "Which Short: one recipe, all of them, or a random recipe for each video"
         type: choice
         default: random
-        options: [random, all, flip, hunter, ram, domino, nearmiss, freeze, gapjump, roofrun, superrun, superchase]
+        options: [random, all, flip, hunter, ram, domino, nearmiss, freeze, gapjump, roofrun, superrun, superchase, endless]
       count:
         description: "How many videos (with 'all': how many of each recipe)"
         type: choice
@@ -25,7 +25,7 @@ on:
         required: false
         default: ""
       outcome:
-        description: "superchase only: he makes it (pass), falls short of a roof (fail_fall), a car gets him (fail_car), or random"
+        description: "superchase and endless: he makes it (pass), falls short of a roof (fail_fall), a car gets him (fail_car), or random"
         type: choice
         default: pass
         options: [pass, fail_fall, fail_car, random]
@@ -73,7 +73,7 @@ jobs:
         run: |
           python3 - <<'EOF'
           import json, os, random, re
-          recipes = ["flip", "hunter", "ram", "domino", "nearmiss", "freeze", "gapjump", "roofrun", "superrun", "superchase"]
+          recipes = ["flip", "hunter", "ram", "domino", "nearmiss", "freeze", "gapjump", "roofrun", "superrun", "superchase", "endless"]
           pick, n, s = os.environ["RECIPE"], int(os.environ["COUNT"]), os.environ.get("SEED", "").strip()
           own = [a for a in re.split(r"[\s,;]+", os.environ.get("ACTIONS", "").strip().lower()) if a]
           bad = [a for a in own if a not in recipes]

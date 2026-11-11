@@ -25,6 +25,28 @@ Lost City rebuilt in Godot 4.6 as a native Android app. It started as a port of 
 - **Day or night:** the NIGHT/DAY button on the start screen, or Settings. By day it sees you from
   further away and you start with the torch off.
 
+## Roof Run
+
+ROOF RUN on the start screen: an endless run over the roofs of a city in the sun and down through its traffic
+(`scripts/roof_run.gd`, the world in `scripts/roof_track.gd`). He runs by himself and the way turns left or right
+by itself (on corner roofs); you only act:
+
+- **swipe up** (or tap): leap an alley, a step up, an air unit, a fence, a road barrier, or onto a parked car;
+- **swipe down**: dive and roll under a pipe or a gantry (in the air: straight down and roll);
+- **swipe left / right**: change lane (three of them), in the air too.
+
+A swipe counts the moment your thumb moves, and one made a moment early (just before he lands) still happens.
+On a keyboard: the arrows or WASD, space to leap, P to pause.
+
+Off the end of the roofs he drops into a street: cars come at him in one lane, parked cars, slow cars, barriers
+and gantries stand in the other two. A glowing pad near the end of the street throws him back up onto the roofs,
+and round it goes, a little faster every time. Falling into an alley, running into a wall, a car or anything
+you did not clear ends the run; changing lane into something only bounces you back. Coins, close calls, leaping
+a car and leaping off the last roof add to the score; the best is kept on the phone.
+
+The run is its own light scene (no city, no T-Rex): the menu's city is freed while you run and comes back with
+MENU. `godot --path godot -- --roofrun` starts one directly (`--auto`: it plays itself).
+
 ## Get the APK
 
 Every push to `main` that changes this folder builds a new APK and publishes it on the
@@ -41,8 +63,9 @@ web-version app.
    C crouches, F toggles the light, E interacts (and gets in and out of cars), G throws a flare,
    Q rings her phone. Driving: WASD drives, Space is the handbrake, H (or C) the horn, F the headlights.
 
-Graphics can be set under Settings: Auto picks a level from how fast the phone runs; Low, Medium
-and High fix it (render resolution, reflections, glow, flashlight shadow, how far cars are drawn).
+Graphics can be set under Settings: Auto picks a level from how fast the phone runs (on a phone it starts at
+Medium and steps down if the frame rate drops); Low, Medium and High fix it (render resolution, reflections,
+glow, flashlight shadow, how far cars are drawn). A phone never draws more than 60 frames a second.
 
 ## What is where
 
@@ -70,6 +93,11 @@ and High fix it (render resolution, reflections, glow, flashlight shadow, how fa
 - `tests/autoplay.gd`: plays whole games by itself and checks each step (runs on every build)
 - `tests/man_test.gd`: walks, runs, stops, turns and crouches the player and checks the speed builds
   up and dies down over time, turns take a curve and feet on the ground don't slide (runs on every build)
+- `scripts/roof_run.gd`, `scripts/roof_track.gd`, `scripts/swipe.gd`: the Roof Run (above), its world built as
+  he runs, and the swipes (shared with the Superhero Run)
+- `tests/roof_run_test.gd`: the Roof Run plays itself for 3 km (streets, launches, corners, leaps, rolls, lane
+  changes, coins), ends soon with nobody playing, answers each swipe, and goes from the menu to a run and back
+  (runs on every build)
 - `tests/drive_test.gd`: drives a car (stick and the phone buttons), crashes it into a wall, gets out,
   has the T-Rex throw it and plough through a parked one, escapes with her by car, shoves a parked car,
   dents and wrecks a car, throws a flare, rings her phone, switches day and night, and checks the
@@ -88,6 +116,12 @@ The player's movement on its own:
 
 ```
 godot --headless --path godot --fixed-fps 30 -s res://tests/man_test.gd
+```
+
+The Roof Run:
+
+```
+godot --headless --path godot --fixed-fps 30 -s res://tests/roof_run_test.gd -- --seed=3
 ```
 
 Cars, the T-Rex, flares, her phone and day/night:

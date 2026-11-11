@@ -98,6 +98,17 @@ jobs:
           grep -E "FAIL|SCRIPT ERROR|^ERROR" drive.log | head -20 | sed "s/^/::error title=drive_test::/" || true
           exit $status
 
+      - name: Test the Roof Run (3 km playing itself, the swipes, to the menu and back)
+        working-directory: godot
+        run: |
+          set -o pipefail
+          status=0
+          for sd in 3 21; do
+            ~/godot/godot --headless --path . --fixed-fps 30 -s res://tests/roof_run_test.gd -- --seed=$sd 2>&1 | tee roof.log || status=1
+            grep -E "FAIL|SCRIPT ERROR" roof.log | head -10 | sed "s/^/::error title=roof_run_test seed $sd::/" || true
+          done
+          exit $status
+
       - name: Play full games automatically
         working-directory: godot
         run: |

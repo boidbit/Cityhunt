@@ -25,7 +25,7 @@ TRANSITIONS = ["fadewhite", "slideleft", "circleopen", "zoomin", "smoothup", "ra
 CHAPTER = {"flip": "T-Rex flips the car", "hunter": "Hunting the T-Rex", "ram": "Car vs T-Rex",
            "domino": "Every car in the street", "nearmiss": "Inches from its jaws", "freeze": "Don't move",
            "gapjump": "The gap jump", "roofrun": "Rooftop run", "superrun": "Superhero over the roofs",
-           "superchase": "Every car is after him"}
+           "superchase": "Every car is after him", "endless": "The endless run"}
 TITLES = ["Every Stunt in One Video 😳", "All the Best Moments in One Go 💥", "Which One Was the Best? 👀",
           "The Whole City, One Run 🏙️", "Watch Till the End 😱"]
 

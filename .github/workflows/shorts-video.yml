@@ -4,6 +4,8 @@ name: Render Shorts video
 # day: Godot's movie maker plays a scripted recipe (godot/tests/short.gd) on a software renderer, then
 # tools/shorts/compose.py lays the sound design and a hook caption on it. The videos render side by side.
 # The videos and a contact sheet of each are in the run's Artifacts and on the public "shorts-latest" release.
+# "combine: one video" also joins them, in order, into one video (tools/shorts/combine.py): "recipe: all" with it
+# puts every action in the one video; "actions" picks your own list and order.
 # Only run by hand (Actions tab, Run workflow), never on a push.
 on:
   workflow_dispatch:
@@ -37,6 +39,15 @@ on:
         type: choice
         default: some
         options: [some, all]
+      combine:
+        description: "one video: join every video of this run into ONE video, action after action (also kept separately)"
+        type: choice
+        default: separate
+        options: [separate, one video]
+      actions:
+        description: "Your own list of actions, in order, comma separated (e.g. flip,ram,gapjump,superchase): overrides recipe"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -50,28 +61,42 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      parts: ${{ steps.plan.outputs.parts }}
+      seed: ${{ steps.plan.outputs.seed }}
     steps:
       - id: plan
         env:
           RECIPE: ${{ inputs.recipe }}
           COUNT: ${{ inputs.count }}
           SEED: ${{ inputs.seed }}
+          ACTIONS: ${{ inputs.actions }}
         run: |
           python3 - <<'EOF'
-          import json, os, random
+          import json, os, random, re
           recipes = ["flip", "hunter", "ram", "domino", "nearmiss", "freeze", "gapjump", "roofrun", "superrun", "superchase"]
           pick, n, s = os.environ["RECIPE"], int(os.environ["COUNT"]), os.environ.get("SEED", "").strip()
+          own = [a for a in re.split(r"[\s,;]+", os.environ.get("ACTIONS", "").strip().lower()) if a]
+          bad = [a for a in own if a not in recipes]
+          if bad:
+              raise SystemExit("::error title=actions::not a recipe: %s (pick from %s)" % (", ".join(bad), ", ".join(recipes)))
           base = int(s) if s.isdigit() else random.randint(1, 9000)
           jobs = []
           for k in range(n):
-              if pick == "all":
+              if own:
+                  # each its own seed, so the same action twice is two different places
+                  jobs += [{"recipe": r, "seed": base + k * len(own) + i} for i, r in enumerate(own)]
+              elif pick == "all":
                   jobs += [{"recipe": r, "seed": base + k} for r in recipes]
               elif pick == "random":
                   jobs.append({"recipe": random.choice(recipes), "seed": base + k})
               else:
                   jobs.append({"recipe": pick, "seed": base + k})
+          # (the matrix renders them side by side; the combine job joins them in this order)
+          parts = " ".join("out/%s_seed%d.mp4" % (j["recipe"], j["seed"]) for j in jobs)
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write("matrix=" + json.dumps({"include": jobs}) + "\n")
+              f.write("parts=" + parts + "\n")
+              f.write("seed=%d\n" % base)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write("### Videos to make: %d\n\n| recipe | seed |\n|---|---|\n" % len(jobs))
               f.writelines("| %s | %d |\n" % (j["recipe"], j["seed"]) for j in jobs)
@@ -180,8 +205,52 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # "combine: one video": every video of the run joined into one, in the planned order
+  combine:
+    needs: [plan, render]
+    if: always() && inputs.combine == 'one video' && needs.plan.result == 'success' && needs.render.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: short-*
+          path: out
+          merge-multiple: true
+
+      - name: Join them into one video
+        env:
+          PARTS: ${{ needs.plan.outputs.parts }}
+          SEED: ${{ needs.plan.outputs.seed }}
+        run: |
+          set -o pipefail
+          name=combo_seed${SEED}
+          if ! python3 tools/shorts/combine.py --seed $SEED --out out/$name.mp4 $PARTS 2>&1 | tee combine.log; then
+            echo "::error title=combine::$(tail -15 combine.log | sed 's/%/pct/g' | sed 's/$/%0A/' | tr -d '\n')"
+            exit 1
+          fi
+          grep "^warning" combine.log | sed "s/^warning: /::warning title=combine::/" || true
+          echo "::notice title=one video::$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/$name.mp4) seconds, $(echo $PARTS | wc -w) actions planned"
+          { echo "### $name.mp4 (every action in one video)"; echo '```'; cat out/$name.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p combo
+          mv out/$name.mp4 out/${name}_sheet.png out/$name.txt combo/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: short-combo
+          path: combo/*
+          retention-days: 14
+
   publish:
-    needs: render
+    needs: [render, combine]
     if: always() && needs.render.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
@@ -205,4 +274,4 @@ jobs:
           gh release delete shorts-latest --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
           gh release create shorts-latest out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
             --title "Shorts renders (latest)" \
-            --notes "Rendered by the Render Shorts video workflow from ${GITHUB_SHA::7}: one video per recipe and seed, each with a contact sheet (one frame a second) and a .txt with its title, description and tags."
+            --notes "Rendered by the Render Shorts video workflow from ${GITHUB_SHA::7}: one video per recipe and seed, each with a contact sheet (one frame a second) and a .txt with its title, description and tags. With 'combine: one video', combo_seed*.mp4 is all of them joined into one video."

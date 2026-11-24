@@ -292,15 +292,16 @@ func _move_cycle(dt: float, go: bool, want_yaw: float, want: float, crouch: bool
 		target = minf(target, lerpf(target, 1.4, clampf((absf(a) - deg_to_rad(45.0)) / deg_to_rad(65.0), 0.0, 1.0)))
 	if not go and speed > 3.3:
 		target = 3.0    # a runner needs a few strides before he can stop
-	var up := 2.7 if speed < 4.6 else 2.0
-	var down := 6.0 if braking else 3.4
+	# (quick enough to feel the stick at once on a phone, still a few strides to full speed)
+	var up := 4.2 if speed < 4.6 else 3.0
+	var down := 8.0 if braking else 5.0
 	speed = move_toward(speed, target, (up if target > speed else down) * dt)
 	# he can't run faster than the ground lets him (walls, cars)
 	if real_speed < speed - 0.8 and go:
 		speed = maxf(real_speed + 0.8, 0.0)
-	var max_rate := lerpf(4.6, 2.3, clampf((speed - 1.2) / 5.0, 0.0, 1.0))
-	var want_rate := clampf(a * 5.0, -max_rate, max_rate) if go else 0.0
-	turn_rate = lerpf(turn_rate, want_rate, 1.0 - exp(-dt / 0.11))
+	var max_rate := lerpf(5.6, 3.2, clampf((speed - 1.2) / 5.0, 0.0, 1.0))
+	var want_rate := clampf(a * 6.5, -max_rate, max_rate) if go else 0.0
+	turn_rate = lerpf(turn_rate, want_rate, 1.0 - exp(-dt / 0.075))
 	yaw += turn_rate * dt
 	phase = fposmod(phase + speed / _stride(speed) * dt, 1.0)
 	if crouch:

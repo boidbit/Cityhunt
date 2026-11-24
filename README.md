@@ -32,7 +32,10 @@ Pull requests build the APK too. You can download it from the run's **Artifacts*
 - `godot/`: Lost City rebuilt in Godot 4.6 as a native Android app, now with a T-Rex, cars you can
   drive (and it can flip), her phone to ring, flares, an evacuated city and a day/night option. Its APK is on the
   [godot-apk-latest](https://github.com/talibmohd0099/Cityhunt/releases/tag/godot-apk-latest) release.
-  See [godot/README.md](godot/README.md).
+  Its menu also has ROOF RUN, an endless run over the roofs and through the traffic (swipe to leap, roll and
+  change lane), and the Superhero Run. See [godot/README.md](godot/README.md).
+- The **Render Shorts video** workflow (Actions tab) records the Godot version's action scenes as vertical
+  videos; "combine: one video" joins several of them into one, and "actions" picks your own list.
 - `getaway/`: Getaway, a one-thumb driving prototype that reuses Lost City's cars. Its APK is on the
   [getaway-apk-latest](https://github.com/talibmohd0099/Cityhunt/releases/tag/getaway-apk-latest) release.
   See [getaway/README.md](getaway/README.md).

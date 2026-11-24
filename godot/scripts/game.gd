@@ -101,6 +101,7 @@ var fps_n := 0
 var fps_check := 0.0
 var low_q := false
 var q1 := false
+var mobile := false     # a phone or tablet: AUTO graphics start at Medium, at most 60 frames a second
 
 func _ready() -> void:
 	for a in OS.get_cmdline_user_args():
@@ -159,6 +160,11 @@ func _ready() -> void:
 	sfx.set_master(settings.vol / 100.0)
 	get_viewport().size_changed.connect(_on_resize)
 	_on_resize()
+	mobile = OS.has_feature("mobile") or DisplayServer.is_touchscreen_available()
+	if mobile:
+		# a 90 or 120 Hz screen would otherwise have it draw twice as many frames, run hot and slow down
+		Engine.max_fps = 60
+		q1 = true
 	apply_gfx()
 	set_daylight(bool(settings.day) or args.has("day"))
 	to_menu()
@@ -1482,19 +1488,20 @@ func _menu_cam(t: float) -> void:
 	cam.look_at(Vector3(-52.5, 3.2, z - 30.0))
 	pl.cam_yaw = PI
 
-## AUTO graphics: after a few seconds of play, step down if the frame rate is poor.
+## AUTO graphics: every few seconds of play, step down if the frame rate is poor (below 42 a second on High,
+## below 30 on Medium).
 func _adapt(raw: float) -> void:
 	if phase == "menu" or paused or low_q or settings.gfx != "auto" or args.has("noadapt"):
 		return
 	fps_acc += raw
 	fps_n += 1
 	fps_check += raw
-	if fps_check > 5.0:
+	if fps_check > 3.0:
 		var fps := fps_n / fps_acc
 		fps_acc = 0.0
 		fps_n = 0
 		fps_check = 0.0
-		if fps < 28.0:
+		if fps < (30.0 if q1 else 42.0):
 			if not q1:
 				q1 = true
 			else:

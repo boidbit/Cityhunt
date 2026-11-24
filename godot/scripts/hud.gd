@@ -1134,9 +1134,11 @@ func _build_start() -> void:
 		g.save_settings()
 		_sync_settings())
 	v.add_child(_row([_button("START", true, g.start_game), day_btn, _button("SETTINGS", false, open_settings)]))
-	# the Superhero Run (scripts/director.gd, scripts/superhero.gd): over the roofs, then every car in the street
+	# the Roof Run (scripts/roof_run.gd): an endless run over the roofs and through the traffic; the Superhero Run
+	# (scripts/director.gd, scripts/superhero.gd): over the roofs, then every car in the street
 	v.add_child(_gap(10))
-	v.add_child(_row([_button("SUPERHERO RUN", true, func(): load("res://scripts/director.gd").start_run(get_tree(), false)),
+	v.add_child(_row([_button("ROOF RUN", true, func(): RoofRun.start(get_tree())),
+		_button("SUPERHERO RUN", false, func(): load("res://scripts/director.gd").start_run(get_tree(), false)),
 		_button("DAILY RUN", false, func(): load("res://scripts/director.gd").start_run(get_tree(), true))]))
 
 var end_eyebrow: Label
@@ -1215,7 +1217,7 @@ func _build_settings() -> void:
 			var was_low: bool = g.settings.gfx == "low"
 			g.settings.gfx = q
 			g.low_q = false
-			g.q1 = false
+			g.q1 = g.mobile
 			g.apply_gfx()
 			_sync_settings())
 		seg.add_child(b)

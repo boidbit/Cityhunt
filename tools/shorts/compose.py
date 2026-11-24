@@ -22,7 +22,7 @@ FONT = os.path.join(ROOT, "getaway", "assets", "fonts", "BigShouldersDisplay.ttf
 
 HOOK = {"flip": "WAIT FOR IT", "ram": "CAR VS T-REX", "nearmiss": "TOO CLOSE", "freeze": "DO NOT MOVE", "domino": "",
         "hunter": "HUNT IT DOWN", "gapjump": "DON'T LOOK DOWN", "roofrun": "HOW FAR CAN HE GO?",
-        "superrun": "NOTHING CAN STOP HIM", "superchase": "EVERY CAR IS AFTER HIM"}
+        "superrun": "NOTHING CAN STOP HIM", "superchase": "EVERY CAR IS AFTER HIM", "endless": "HOW FAR CAN HE RUN?"}
 
 # What to paste into YouTube for each Short: a title picked by the seed (so two videos of one recipe differ),
 # a description and tags. Titles stay under 100 characters; no film or car brand names.
@@ -45,6 +45,10 @@ TITLES = {
                 "Flat Out Over the Rooftops 😱", "One Run, Every Roof 🏃🏙️"],
     "superrun": ["He Jumped 20 Floors Up 😳", "Superhero Run Across the City 🦸", "Nothing Can Stop Him 💥",
                  "The Landing at the End 😱", "Day 1 With Superpowers 🦸💥"],
+    "endless": ["How Far Can He Run? 🏃💨", "Roofs, Traffic, Repeat 🏙️", "Endless Rooftop Run 😳",
+                "He Never Stops Running 🏃", "Rooftop to Traffic and Back 💥"],
+    "endless_fail": ["So Close… Then This 😬", "One Wrong Step 😳", "The Run Had to End Somewhere 😬",
+                     "He Didn't See That Coming 😱", "How Far Did He Get? 😬"],
     "superchase": ["Every Car in the City Is After Him 😳", "He Crushed the Car With One Jump 💥", "Superhero vs Traffic 🦸🚗",
                    "Run. Dodge. Crush. 💥", "The Last Car Never Saw It Coming 😱"],
     # (superchase when it goes wrong: he comes up short of a roof, or a car gets him)
@@ -69,6 +73,10 @@ STORY = {
                   "one with one jump. (3D animation made in a game engine.)",
     "superchase_fail": "Over the roofs and down to the street with every car after him, but this time it doesn't "
                        "go to plan. (3D animation made in a game engine: nobody gets hurt.)",
+    "endless": "An endless run: across the rooftops, down into the traffic and back up again, faster every time. "
+               "Gameplay of Roof Run. (3D game: nobody gets hurt.)",
+    "endless_fail": "An endless run across the rooftops and through the traffic, until one thing doesn't go to plan. "
+                    "Gameplay of Roof Run. (3D game: nobody gets hurt.)",
 }
 QUESTION = {
     "flip": "Would you have made it out? 👇", "ram": "Who won this one? 👇", "domino": "How many did you count? 👇",
@@ -78,6 +86,8 @@ QUESTION = {
     "superrun": "Which power should he get next? 👇",
     "superchase": "Which dodge was the best? 👇",
     "superchase_fail": "Would you have made it? 👇",
+    "endless": "How far would you get? 👇",
+    "endless_fail": "How far would you get? 👇",
 }
 # (a rooftop leap has nothing to do with dinosaurs: its own tags)
 PARKOUR_TAGS = ["parkour", "rooftop", "rooftop jump", "free running", "stunt", "slow motion", "3d animation", "cgi",
@@ -92,15 +102,16 @@ RECIPE_TAGS = {
     "roofrun": ["rooftop run", "roof run", "sprint", "parkour run"],
     "superrun": ["superhero", "superpowers", "super jump", "superhero landing", "flip"],
     "superchase": ["superhero", "superpowers", "car chase", "dodge", "super jump", "car kick"],
+    "endless": ["endless runner", "runner game", "rooftop run", "mobile game", "dodge", "traffic"],
 }
 HASHTAGS = {"flip": "#trex #dinosaur #slowmotion", "ram": "#trex #dinosaur #carcrash", "domino": "#trex #satisfying #dinosaur",
             "nearmiss": "#trex #dinosaur #closecall", "freeze": "#trex #dinosaur #suspense",
             "hunter": "#trex #dinosaur #carcrash", "gapjump": "#parkour #rooftop #slowmotion",
             "roofrun": "#parkour #rooftop #freerunning", "superrun": "#superhero #superpowers #slowmotion",
-            "superchase": "#superhero #carchase #stunt"}
+            "superchase": "#superhero #carchase #stunt", "endless": "#endlessrunner #parkour #mobilegame"}
 
 
-ROOF_RECIPES = ("gapjump", "roofrun", "superrun", "superchase")
+ROOF_RECIPES = ("gapjump", "roofrun", "superrun", "superchase", "endless")
 
 
 def metadata(recipe, seed, fail=False):
@@ -186,6 +197,16 @@ def effects(name, n):
         return [("stinger", 0.8, 0, 1)]
     if name == "crash":
         return [("thud_3", 1.0, 0, 0.8), ("boom_1", 0.7, 0, 0.9), ("SUB", 0.9, 0, 1), ("step_dry_4", 0.8, 0.3, 0.8)]
+    # the Roof Run (endless): what he picks up, what he bumps into, the end of the run
+    if name.startswith("coin"):
+        return [("clink_%d" % (n % 2 + 1), 0.35, 0, 1.4)]
+    if name.startswith("bump"):
+        return [("thud_1", 0.9, 0, 1.1), ("step_dry_2", 0.7, 0.05, 1)]
+    if name.startswith("drop"):
+        return [("whoosh", 0.8, -0.2, 0.7)]
+    if name.startswith("crash_"):
+        return [("boom_1", 1.0, 0, 0.9), ("clang_2", 1.0, 0.01, 1), ("shatter_1", 0.9, 0.03, 1), ("SUB", 1.0, 0, 1),
+                ("thud_3", 1.0, 0.4, 0.8)]
     if name.startswith("slow_on"):
         return [("whoosh", 0.7, 0, 0.5)]
     # a superhero: blasting off, turning over in the air, coming down hard enough to crack the roof

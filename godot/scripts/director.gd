@@ -351,7 +351,10 @@ func setup() -> void:
 	seed(seed_n)
 	g.set_daylight(true)
 	g.start_game()
-	g.settings.gfx = "high"
+	# (the videos at their best; in the game's own run the player's graphics setting stays as it is: forcing High
+	# there made the run stutter on phones)
+	if not play:
+		g.settings.gfx = "high"
 	g.apply_gfx()
 	g.hud.visible = false
 	# dry: no rain, no lightning, nothing the director of the game would stage
@@ -2631,26 +2634,15 @@ func _update_hud() -> void:
 		lbl.modulate.a = 0.55 + 0.45 * absf(sin(now() * 9.0))
 	(hud_lbl.flash as Label).text = sr.flash if now() < sr.flash_until else ""
 
-## Swipes and taps (a mouse or a touch screen; the arrow keys and space on a keyboard) for the run.
-var _press := Vector2.INF
+## Swipes and taps (a mouse or a touch screen; the arrow keys and space on a keyboard) for the run: a swipe
+## counts as soon as the finger has moved far enough (scripts/swipe.gd), not when it lifts.
+var _swipe := Swipe.new()
 func _input(e: InputEvent) -> void:
 	if not play or sr == null:
 		return
-	var gst := ""
-	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-		if e.pressed:
-			_press = e.position
-		elif _press != Vector2.INF:
-			var v: Vector2 = e.position - _press
-			_press = Vector2.INF
-			if v.length() < 40.0:
-				gst = "tap"
-			elif absf(v.x) > absf(v.y):
-				gst = "side"
-			else:
-				gst = "up" if v.y < 0.0 else "down"
-	elif e is InputEventKey and e.pressed and not e.echo:
-		gst = {KEY_UP: "up", KEY_DOWN: "down", KEY_LEFT: "side", KEY_RIGHT: "side", KEY_SPACE: "tap"}.get(e.keycode, "")
+	var gst := _swipe.feed(e)
+	if gst == "left" or gst == "right":
+		gst = "side"
 	if gst != "":
 		sr.gesture(gst, now())
 
